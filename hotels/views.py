@@ -7,7 +7,8 @@ from .serializers import (
     HotelListSerializer,
     HotelDetailSerializer,
 )
-
+from .models import Hotel, RoomType, Membership
+from .permissions import IsActiveOrganisationMember
 
 # ==========================================================
 # PUBLIC HOTEL LIST
@@ -59,4 +60,28 @@ class PublicHotelDetailView(generics.RetrieveAPIView):
                 )
             ),
             "images",
+        )
+
+class OrganisationHotelListView(generics.ListAPIView):
+
+    serializer_class = HotelListSerializer
+    permission_classes = [IsActiveOrganisationMember]
+
+    def get_queryset(self):
+
+        active_organisations = Membership.objects.filter(
+            user=self.request.user,
+            is_active=True,
+            organisation__status="active",
+        ).values_list(
+            "organisation_id",
+            flat=True,
+        )
+
+        return Hotel.objects.filter(
+            organisation_id__in=active_organisations,
+        ).select_related(
+            "organisation"
+        ).order_by(
+            "name"
         )
