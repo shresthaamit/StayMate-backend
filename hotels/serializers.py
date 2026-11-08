@@ -8,7 +8,7 @@ from .models import (
     HotelContact,
     RoomType,
     RoomAvailability,
-    HotelImage,
+    HotelImage, Organisation,Membership
 )
 
 
@@ -244,3 +244,136 @@ class HotelDetailSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+class HotelCreateSerializer(serializers.ModelSerializer):
+
+    organisation_id = serializers.IntegerField(write_only=True)
+
+    class Meta:
+        model = Hotel
+        fields = [
+            "id",
+            "organisation_id",
+            "name",
+            "description",
+            "hotel_type",
+            "star_rating",
+            "website",
+            "country",
+            "province",
+            "city",
+            "area",
+            "address",
+            "postal_code",
+            "latitude",
+            "longitude",
+            "nearby_landmarks",
+            "contact_phone",
+            "alternative_phone",
+            "contact_email",
+            "preferred_language",
+            "preferred_contact_time",
+            "check_in_time",
+            "check_out_time",
+            "cancellation_policy",
+            "refund_policy",
+            "child_policy",
+            "extra_bed_policy",
+            "pet_policy",
+            "smoking_policy",
+            "payment_methods",
+            "tax_information",
+            "deposit_policy",
+        ]
+        read_only_fields = ["id"]
+
+    def validate_organisation_id(self, value):
+
+        request = self.context["request"]
+
+        membership = Membership.objects.filter(
+            user=request.user,
+            organisation_id=value,
+            is_active=True,
+            organisation__status="active",
+            role__in=[
+                Membership.Role.OWNER,
+                Membership.Role.ADMIN,
+            ],
+        ).select_related("organisation").first()
+
+        if not membership:
+            raise serializers.ValidationError(
+                "You do not have permission to register a hotel under this organisation."
+            )
+
+        return membership.organisation
+
+    def create(self, validated_data):
+
+        organisation = validated_data.pop("organisation_id")
+
+        return Hotel.objects.create(
+            organisation=organisation,
+            **validated_data
+        )
+
+class HotelUpdateSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = Hotel
+        fields = [
+            "id",
+            "name",
+            "description",
+            "hotel_type",
+            "star_rating",
+            "website",
+            "country",
+            "province",
+            "city",
+            "area",
+            "address",
+            "postal_code",
+            "latitude",
+            "longitude",
+            "nearby_landmarks",
+            "contact_phone",
+            "alternative_phone",
+            "contact_email",
+            "preferred_language",
+            "preferred_contact_time",
+            "check_in_time",
+            "check_out_time",
+            "cancellation_policy",
+            "refund_policy",
+            "child_policy",
+            "extra_bed_policy",
+            "pet_policy",
+            "smoking_policy",
+            "payment_methods",
+            "tax_information",
+            "deposit_policy",
+        ]
+
+        read_only_fields = ["id"]
+
+    def to_internal_value(self, data):
+
+        protected_fields = {
+            "organisation",
+            "organisation_id",
+            "is_verified",
+            "verified_at",
+            "status",
+        }
+
+        submitted_fields = protected_fields.intersection(data.keys())
+
+        if submitted_fields:
+            raise serializers.ValidationError({
+                field: "This field cannot be updated here."
+                for field in submitted_fields
+            })
+
+        return super().to_internal_value(data)

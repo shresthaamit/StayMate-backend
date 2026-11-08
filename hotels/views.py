@@ -5,10 +5,10 @@ from django.db.models import Prefetch
 from .models import Hotel, RoomType
 from .serializers import (
     HotelListSerializer,
-    HotelDetailSerializer,
+    HotelDetailSerializer,HotelCreateSerializer,HotelUpdateSerializer,
 )
 from .models import Hotel, RoomType, Membership
-from .permissions import IsActiveOrganisationMember
+from .permissions import IsActiveOrganisationMember,IsOrganisationOwnerOrAdmin
 
 # ==========================================================
 # PUBLIC HOTEL LIST
@@ -84,4 +84,59 @@ class OrganisationHotelListView(generics.ListAPIView):
             "organisation"
         ).order_by(
             "name"
+        )
+
+class OrganisationHotelDetailView(generics.RetrieveAPIView):
+    serializer_class = HotelDetailSerializer
+    permission_classes = [IsActiveOrganisationMember]
+
+    def get_queryset(self):
+        active_organisations = Membership.objects.filter(
+            user=self.request.user,
+            is_active=True,
+            organisation__status="active",
+        ).values_list("organisation_id", flat=True)
+
+        return Hotel.objects.filter(
+            organisation_id__in=active_organisations,
+        ).select_related("organisation").prefetch_related(
+            "hotel_facilities__facility",
+            "contacts",
+            Prefetch(
+                "room_types",
+                queryset=RoomType.objects.filter(
+                    is_active=True
+                ).prefetch_related(
+                    "facilities",
+                    "availability_records",
+                )
+            ),
+            "images",
+        )
+
+
+
+class HotelCreateView(generics.CreateAPIView):
+    serializer_class = HotelCreateSerializer
+    permission_classes = [IsOrganisationOwnerOrAdmin]
+
+
+
+class HotelUpdateView(generics.UpdateAPIView):
+    serializer_class = HotelUpdateSerializer
+    permission_classes = [IsOrganisationOwnerOrAdmin]
+
+    def get_queryset(self):
+        active_organisations = Membership.objects.filter(
+            user=self.request.user,
+            is_active=True,
+            organisation__status="active",
+            role__in=[
+                Membership.Role.OWNER,
+                Membership.Role.ADMIN,
+            ],
+        ).values_list("organisation_id", flat=True)
+
+        return Hotel.objects.filter(
+            organisation_id__in=active_organisations,
         )
