@@ -1,7 +1,7 @@
 from django.urls import path
 
 from .views import (
-    PublicHotelListView,PublicHotelDetailView,OrganisationHotelListView,OrganisationHotelDetailView,HotelCreateView,HotelUpdateView
+    PublicHotelListView,PublicHotelDetailView,OrganisationHotelListView,OrganisationHotelDetailView,HotelCreateView,HotelUpdateView,HotelDeleteView
 )
 
 urlpatterns = [
@@ -23,5 +23,10 @@ path(
     "management/hotels/<int:pk>/update/",
     HotelUpdateView.as_view(),
     name="organisation-hotel-update",
+),
+path(
+    "management/hotels/<int:pk>/delete/",
+    HotelDeleteView.as_view(),
+    name="organisation-hotel-delete",
 ),
 ]

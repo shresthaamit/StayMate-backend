@@ -6,7 +6,7 @@ from django.core.validators import (
     MaxValueValidator,
 )
 from django.utils.text import slugify
-
+from decimal import Decimal
 
 # ==========================================================
 # ORGANISATION
@@ -173,10 +173,10 @@ class Hotel(models.Model):
         decimal_places=7,
         null=True,
         blank=True,
-        validators=[
-            MinValueValidator(-90),
-            MaxValueValidator(90)
-        ]
+       validators=[
+    MinValueValidator(Decimal("-90")),
+    MaxValueValidator(Decimal("90"))
+]
     )
 
     longitude = models.DecimalField(
@@ -185,9 +185,9 @@ class Hotel(models.Model):
         null=True,
         blank=True,
         validators=[
-            MinValueValidator(-180),
-            MaxValueValidator(180)
-        ]
+    MinValueValidator(Decimal("-180")),
+    MaxValueValidator(Decimal("180"))
+]
     )
 
     nearby_landmarks = models.TextField(blank=True)
@@ -232,7 +232,8 @@ class Hotel(models.Model):
 
     is_verified = models.BooleanField(default=False)
     verified_at = models.DateTimeField(null=True, blank=True)
-
+    is_deleted = models.BooleanField(default=False)
+    deleted_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -411,7 +412,7 @@ class RoomType(models.Model):
     base_price_per_night = models.DecimalField(
         max_digits=10,
         decimal_places=2,
-        validators=[MinValueValidator(0)]
+        validators=[MinValueValidator(Decimal("0.00"))]
     )
 
     min_price_per_night = models.DecimalField(
@@ -419,7 +420,7 @@ class RoomType(models.Model):
         decimal_places=2,
         null=True,
         blank=True,
-        validators=[MinValueValidator(0)]
+        validators=[MinValueValidator(Decimal("0.00"))]
     )
 
     max_price_per_night = models.DecimalField(
@@ -427,7 +428,7 @@ class RoomType(models.Model):
         decimal_places=2,
         null=True,
         blank=True,
-        validators=[MinValueValidator(0)]
+       validators=[MinValueValidator(Decimal("0.00"))]
     )
 
     currency = models.CharField(max_length=3, default="NPR")
@@ -497,7 +498,7 @@ class RoomAvailability(models.Model):
     price_per_night = models.DecimalField(
         max_digits=10,
         decimal_places=2,
-        validators=[MinValueValidator(0)]
+        validators=[MinValueValidator(Decimal("0.00"))]
     )
 
     is_available = models.BooleanField(default=True)

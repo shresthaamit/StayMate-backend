@@ -1,7 +1,7 @@
 
 from rest_framework import generics
 from django.db.models import Prefetch
-
+from django.utils import timezone
 from .models import Hotel, RoomType
 from .serializers import (
     HotelListSerializer,
@@ -24,17 +24,12 @@ class PublicHotelListView(generics.ListAPIView):
             status=Hotel.Status.ACTIVE,
             is_verified=True,
             organisation__status="active",
+            is_deleted=False,
         ).select_related(
             "organisation"
         ).order_by(
             "name"
         )
-
-
-# ==========================================================
-# PUBLIC HOTEL DETAIL
-# GET /api/hotels/<id>/
-# ==========================================================
 
 class PublicHotelDetailView(generics.RetrieveAPIView):
 
@@ -45,6 +40,7 @@ class PublicHotelDetailView(generics.RetrieveAPIView):
             status=Hotel.Status.ACTIVE,
             is_verified=True,
             organisation__status="active",
+            is_deleted=False,
         ).select_related(
             "organisation"
         ).prefetch_related(
@@ -62,9 +58,32 @@ class PublicHotelDetailView(generics.RetrieveAPIView):
             "images",
         )
 
+    
 class OrganisationHotelListView(generics.ListAPIView):
 
     serializer_class = HotelListSerializer
+    permission_classes = [IsActiveOrganisationMember]
+
+    def get_queryset(self):
+        active_organisations = Membership.objects.filter(
+            user=self.request.user,
+            is_active=True,
+            organisation__status="active",
+        ).values_list(
+            "organisation_id",
+            flat=True,
+        )
+
+        return Hotel.objects.filter(
+            organisation_id__in=active_organisations,
+            is_deleted=False,
+        ).select_related(
+            "organisation"
+        ).order_by(
+            "name"
+        )
+class OrganisationHotelDetailView(generics.RetrieveAPIView):
+    serializer_class = HotelDetailSerializer
     permission_classes = [IsActiveOrganisationMember]
 
     def get_queryset(self):
@@ -80,26 +99,10 @@ class OrganisationHotelListView(generics.ListAPIView):
 
         return Hotel.objects.filter(
             organisation_id__in=active_organisations,
+            is_deleted=False,
         ).select_related(
             "organisation"
-        ).order_by(
-            "name"
-        )
-
-class OrganisationHotelDetailView(generics.RetrieveAPIView):
-    serializer_class = HotelDetailSerializer
-    permission_classes = [IsActiveOrganisationMember]
-
-    def get_queryset(self):
-        active_organisations = Membership.objects.filter(
-            user=self.request.user,
-            is_active=True,
-            organisation__status="active",
-        ).values_list("organisation_id", flat=True)
-
-        return Hotel.objects.filter(
-            organisation_id__in=active_organisations,
-        ).select_related("organisation").prefetch_related(
+        ).prefetch_related(
             "hotel_facilities__facility",
             "contacts",
             Prefetch(
@@ -114,8 +117,6 @@ class OrganisationHotelDetailView(generics.RetrieveAPIView):
             "images",
         )
 
-
-
 class HotelCreateView(generics.CreateAPIView):
     serializer_class = HotelCreateSerializer
     permission_classes = [IsOrganisationOwnerOrAdmin]
@@ -123,6 +124,7 @@ class HotelCreateView(generics.CreateAPIView):
 
 
 class HotelUpdateView(generics.UpdateAPIView):
+
     serializer_class = HotelUpdateSerializer
     permission_classes = [IsOrganisationOwnerOrAdmin]
 
@@ -135,8 +137,52 @@ class HotelUpdateView(generics.UpdateAPIView):
                 Membership.Role.OWNER,
                 Membership.Role.ADMIN,
             ],
-        ).values_list("organisation_id", flat=True)
+        ).values_list(
+            "organisation_id",
+            flat=True,
+        )
 
         return Hotel.objects.filter(
             organisation_id__in=active_organisations,
+            is_deleted=False,
+        )
+
+# ==========================================================
+# HOTEL SOFT DELETE
+# DELETE /api/hotels/management/hotels/<id>/delete/
+# ==========================================================
+
+class HotelDeleteView(generics.DestroyAPIView):
+
+    permission_classes = [IsOrganisationOwnerOrAdmin]
+
+    def get_queryset(self):
+        active_organisations = Membership.objects.filter(
+            user=self.request.user,
+            is_active=True,
+            organisation__status="active",
+            role__in=[
+                Membership.Role.OWNER,
+                Membership.Role.ADMIN,
+            ],
+        ).values_list(
+            "organisation_id",
+            flat=True,
+        )
+
+        return Hotel.objects.filter(
+            organisation_id__in=active_organisations,
+            is_deleted=False,
+        )
+
+    def perform_destroy(self, instance):
+        instance.is_deleted = True
+        instance.deleted_at = timezone.now()
+
+        instance.save(
+            update_fields=[
+                "is_deleted",
+                "deleted_at",
+                "updated_at",
+            ]
         )
