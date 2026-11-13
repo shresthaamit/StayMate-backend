@@ -24,6 +24,7 @@ urlpatterns = [
         name='token_refresh'
     ),
     path('api/hotels/', include('hotels.urls')),
+    path("api/enquiries/", include("enquiries.urls")),
 ]
 if settings.DEBUG:
     urlpatterns += static(
