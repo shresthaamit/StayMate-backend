@@ -100,3 +100,87 @@ class TravellerRequirement(models.Model):
 
     def __str__(self):
         return f"{self.city} hotel request - {self.user}"
+
+class HotelMatch(models.Model):
+
+    class Status(models.TextChoices):
+        SHORTLISTED = "shortlisted", "Shortlisted"
+        CALL_PENDING = "call_pending", "Call Pending"
+        CALLING = "calling", "Calling"
+        RESPONDED = "responded", "Hotel Responded"
+        UNAVAILABLE = "unavailable", "Unavailable"
+        REJECTED = "rejected", "Rejected"
+
+    # Which traveller request produced this match?
+    requirement = models.ForeignKey(
+        TravellerRequirement,
+        on_delete=models.CASCADE,
+        related_name="hotel_matches"
+    )
+
+    # Which hotel matched the request?
+    hotel = models.ForeignKey(
+        "hotels.Hotel",
+        on_delete=models.CASCADE,
+        related_name="traveller_matches"
+    )
+
+    # Best matching room type at this hotel
+    matched_room_type = models.ForeignKey(
+        "hotels.RoomType",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="hotel_matches"
+    )
+
+    # Matching engine score: 0 to 100
+    match_score = models.PositiveSmallIntegerField(
+        default=0,
+        validators=[
+            MinValueValidator(0),
+            MaxValueValidator(100)
+        ]
+    )
+
+    # Why the hotel matched
+    match_reasons = models.JSONField(
+        default=list,
+        blank=True
+    )
+
+    # Estimated price for the selected room
+    estimated_price_per_night = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal("0.00"))]
+    )
+
+    currency = models.CharField(max_length=3, default="NPR")
+
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.SHORTLISTED
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-match_score", "created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["requirement", "hotel"],
+                name="unique_hotel_match_per_requirement"
+            )
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.hotel.name} - "
+            f"{self.requirement.city} "
+            f"({self.match_score}%)"
+        )

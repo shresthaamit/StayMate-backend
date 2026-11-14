@@ -3,7 +3,7 @@ from django.urls import path
 
 from .views import (
     TravellerRequirementListCreateView,
-    TravellerRequirementDetailView,
+    TravellerRequirementDetailView,  HotelMatchGenerateView,
 )
 
 urlpatterns = [
@@ -17,4 +17,9 @@ urlpatterns = [
         TravellerRequirementDetailView.as_view(),
         name="requirement-detail"
     ),
+    path(
+    "<int:pk>/matches/",
+    HotelMatchGenerateView.as_view(),
+    name="requirement-matches"
+),
 ]

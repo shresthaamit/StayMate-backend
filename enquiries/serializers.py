@@ -1,7 +1,7 @@
 
 from rest_framework import serializers
 from .models import TravellerRequirement
-
+from .models import TravellerRequirement, HotelMatch
 
 class TravellerRequirementSerializer(serializers.ModelSerializer):
 
@@ -79,3 +79,54 @@ class TravellerRequirementSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(errors)
 
         return data
+
+class HotelMatchSerializer(serializers.ModelSerializer):
+    hotel = serializers.SerializerMethodField()
+    matched_room_type = serializers.SerializerMethodField()
+
+    class Meta:
+        model = HotelMatch
+        fields = [
+            "id",
+            "hotel",
+            "matched_room_type",
+            "match_score",
+            "match_reasons",
+            "estimated_price_per_night",
+            "currency",
+            "status",
+            "created_at",
+        ]
+
+    def get_hotel(self, obj):
+        hotel = obj.hotel
+
+        return {
+    "id": hotel.id,
+    "name": hotel.name,
+    "hotel_type": hotel.hotel_type,
+    "star_rating": hotel.star_rating,
+    "country": hotel.country,
+    "province": hotel.province,
+    "city": hotel.city,
+    "area": hotel.area,
+    "address": hotel.address,
+    "contact_phone": hotel.contact_phone,
+    "alternative_phone": hotel.alternative_phone,
+    "contact_email": hotel.contact_email,
+}
+
+    def get_matched_room_type(self, obj):
+        room = obj.matched_room_type
+
+        if room is None:
+            return None
+
+        return {
+            "id": room.id,
+            "name": room.name,
+            "max_occupancy": room.max_occupancy,
+            "base_price_per_night": room.base_price_per_night,
+            "currency": room.currency,
+            "breakfast_included": room.breakfast_included,
+        }
