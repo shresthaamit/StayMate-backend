@@ -9,7 +9,7 @@ from rest_framework.test import APITestCase
 
 from hotels.models import Organisation, Membership, Hotel, RoomType, RoomAvailability
 from .models import TravellerRequirement, HotelMatch
-
+from .services import generate_hotel_matches
 
 User = get_user_model()
 
@@ -145,3 +145,116 @@ class HotelMatchAPITests(APITestCase):
         response = self.client.post(self.url, {}, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+    def test_stale_shortlisted_match_is_deleted(self):
+        # Generate an initial match
+        generate_hotel_matches(self.requirement)
+
+        self.assertTrue(
+            HotelMatch.objects.filter(
+                requirement=self.requirement,
+                hotel=self.hotel,
+                status=HotelMatch.Status.SHORTLISTED
+            ).exists()
+        )
+
+        # Make the hotel ineligible
+        self.hotel.status = "inactive"
+        self.hotel.save(update_fields=["status"])
+
+        # Generate matches again
+        generate_hotel_matches(self.requirement)
+
+        # The stale shortlisted match should be deleted
+        self.assertFalse(
+            HotelMatch.objects.filter(
+                requirement=self.requirement,
+                hotel=self.hotel
+            ).exists()
+        )
+
+
+    def test_stale_call_pending_match_is_preserved(self):
+        # Create a match that has progressed in the calling workflow
+        existing_match = HotelMatch.objects.create(
+            requirement=self.requirement,
+            hotel=self.hotel,
+            matched_room_type=self.room_type,
+            match_score=67,
+            match_reasons=["Test match"],
+            estimated_price_per_night=Decimal("6000.00"),
+            currency="NPR",
+            status=HotelMatch.Status.CALL_PENDING
+        )
+
+        # Make the hotel ineligible
+        self.hotel.status = "inactive"
+        self.hotel.save(update_fields=["status"])
+
+        # Generate matches again
+        generate_hotel_matches(self.requirement)
+
+        # The progressed match must remain unchanged
+        existing_match.refresh_from_db()
+
+        self.assertEqual(
+            existing_match.status,
+            HotelMatch.Status.CALL_PENDING
+        )
+
+        self.assertTrue(
+            HotelMatch.objects.filter(pk=existing_match.pk).exists()
+        )
+
+    def test_stale_shortlisted_match_is_deleted(self):
+        # Generate an initial match
+        self.client.force_authenticate(user=self.user)
+        response = self.client.post(self.url, {}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        # Make the hotel ineligible
+        self.hotel.status = "inactive"
+        self.hotel.save()
+
+        # Generate matches again
+        response = self.client.post(self.url, {}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        # The stale shortlisted match should be deleted
+        self.assertFalse(
+            HotelMatch.objects.filter(
+                requirement=self.requirement,
+                hotel=self.hotel
+            ).exists()
+        )
+
+    def test_stale_call_pending_match_is_preserved(self):
+        # Create a match that has progressed beyond shortlisting
+        existing_match = HotelMatch.objects.create(
+            requirement=self.requirement,
+            hotel=self.hotel,
+            matched_room_type=self.room_type,
+            match_score=67,
+            match_reasons=["Test match"],
+            estimated_price_per_night=Decimal("6000.00"),
+            currency="NPR",
+            status=HotelMatch.Status.CALL_PENDING,
+        )
+
+        # Make the hotel ineligible
+        self.hotel.status = "inactive"
+        self.hotel.save()
+
+        # Generate matches again
+        self.client.force_authenticate(user=self.user)
+        response = self.client.post(self.url, {}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        # The progressed match must remain unchanged
+        existing_match.refresh_from_db()
+        self.assertEqual(
+            existing_match.status,
+            HotelMatch.Status.CALL_PENDING
+        )
+        self.assertTrue(
+            HotelMatch.objects.filter(pk=existing_match.pk).exists()
+        )

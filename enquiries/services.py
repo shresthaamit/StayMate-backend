@@ -321,7 +321,8 @@ def generate_hotel_matches(requirement):
     Find eligible hotel rooms, score them, and save the
     best room-type match for each hotel.
 
-    Existing HotelMatch records are updated rather than duplicated.
+    Updates existing matches, removes stale shortlisted matches,
+    and preserves matches that have progressed beyond shortlisting.
     """
 
     candidates = find_matching_hotel_rooms(requirement)
@@ -354,8 +355,22 @@ def generate_hotel_matches(requirement):
 
     saved_matches = []
 
-    # Save all results in one database transaction
+    # Save results and clean stale shortlisted matches atomically
     with transaction.atomic():
+
+        matched_hotel_ids = set(best_candidates.keys())
+
+        stale_matches = HotelMatch.objects.filter(
+            requirement=requirement,
+            status=HotelMatch.Status.SHORTLISTED
+        )
+
+        if matched_hotel_ids:
+            stale_matches = stale_matches.exclude(
+                hotel_id__in=matched_hotel_ids
+            )
+
+        stale_matches.delete()
 
         for candidate, score_data in best_candidates.values():
 
