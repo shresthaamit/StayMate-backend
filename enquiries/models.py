@@ -184,3 +184,79 @@ class HotelMatch(models.Model):
             f"{self.requirement.city} "
             f"({self.match_score}%)"
         )
+
+class HotelCall(models.Model):
+
+    class Status(models.TextChoices):
+        QUEUED = "queued", "Queued"
+        IN_PROGRESS = "in_progress", "In Progress"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+        CANCELLED = "cancelled", "Cancelled"
+
+    class Mode(models.TextChoices):
+        SIMULATED = "simulated", "Simulated"
+
+    hotel_match = models.ForeignKey(
+        HotelMatch,
+        on_delete=models.CASCADE,
+        related_name="calls"
+    )
+
+    attempt_number = models.PositiveSmallIntegerField(
+        default=1,
+        validators=[MinValueValidator(1)]
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.QUEUED
+    )
+
+    mode = models.CharField(
+        max_length=20,
+        choices=Mode.choices,
+        default=Mode.SIMULATED
+    )
+
+    transcript = models.JSONField(
+        default=list,
+        blank=True
+    )
+
+    response_data = models.JSONField(
+        default=dict,
+        blank=True
+    )
+
+    failure_reason = models.TextField(blank=True)
+
+    started_at = models.DateTimeField(
+        null=True,
+        blank=True
+    )
+
+    completed_at = models.DateTimeField(
+        null=True,
+        blank=True
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["hotel_match", "attempt_number"],
+                name="unique_hotel_call_attempt"
+            )
+        ]
+
+    def __str__(self):
+        return (
+            f"Call attempt {self.attempt_number} - "
+            f"{self.hotel_match.hotel.name} "
+            f"({self.status})"
+        )

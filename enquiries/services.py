@@ -1,9 +1,12 @@
 
 from datetime import timedelta
-
+from datetime import timedelta
+from django.utils import timezone
+from hotels.models import RoomAvailability
+from .models import HotelCall, HotelMatch
 from hotels.models import Hotel
 from django.db import transaction
-from .models import HotelMatch
+
 
 def normalize_name(value):
     """Make facility names comparable."""
@@ -397,3 +400,270 @@ def generate_hotel_matches(requirement):
             match.estimated_price_per_night
         )
     )
+
+def run_simulated_hotel_call(call):
+    """
+    Execute a simulated conversation using information stored
+    in the hotel's database. No real phone call is made.
+    """
+
+    if call.status != HotelCall.Status.QUEUED:
+        raise ValueError("Only queued calls can be executed.")
+
+    match = call.hotel_match
+    requirement = match.requirement
+    hotel = match.hotel
+    room = match.matched_room_type
+
+    now = timezone.now()
+
+    call.status = HotelCall.Status.IN_PROGRESS
+    call.started_at = now
+    call.save(update_fields=["status", "started_at", "updated_at"])
+
+    transcript = []
+
+    def add_message(role, message):
+        transcript.append({
+            "role": role,
+            "message": message,
+            "timestamp": timezone.now().isoformat(),
+        })
+
+    add_message(
+        "assistant",
+        f"Hello! I'm StayMate, contacting {hotel.name} "
+        "on behalf of a traveller."
+    )
+
+    add_message(
+        "assistant",
+        f"We are enquiring about a stay from "
+        f"{requirement.check_in_date} to "
+        f"{requirement.check_out_date} for "
+        f"{requirement.adults} adults and "
+        f"{requirement.children} children."
+    )
+
+    # Handle missing matched room
+    if room is None:
+        add_message(
+            "hotel",
+            "Room information is not available for this enquiry."
+        )
+
+        call.transcript = transcript
+        call.status = HotelCall.Status.FAILED
+        call.failure_reason = "No matched room type is available."
+        call.completed_at = timezone.now()
+
+        call.save(update_fields=[
+            "transcript",
+            "status",
+            "failure_reason",
+            "completed_at",
+            "updated_at",
+        ])
+
+        return call
+
+    # Check availability for every night
+    stay_dates = [
+        requirement.check_in_date + timedelta(days=day)
+        for day in range(
+            (requirement.check_out_date - requirement.check_in_date).days
+        )
+    ]
+
+    availability_records = {
+        record.date: record
+        for record in RoomAvailability.objects.filter(
+            room_type=room,
+            date__in=stay_dates,
+        )
+    }
+
+    all_nights_available = all(
+        day in availability_records
+        and availability_records[day].is_available
+        and availability_records[day].available_rooms >= requirement.rooms
+        for day in stay_dates
+    )
+
+    # Obtain daily prices from stored availability records
+    nightly_prices = []
+
+    if all_nights_available:
+        for day in stay_dates:
+            record = availability_records[day]
+
+            price = (
+                record.price_per_night
+                if record.price_per_night is not None
+                else room.base_price_per_night
+            )
+
+            nightly_prices.append(price)
+
+    if not all_nights_available:
+        add_message(
+            "assistant",
+            "Could you confirm whether the requested room is available?"
+        )
+
+        add_message(
+            "hotel",
+            "The requested room availability could not be confirmed "
+            "for every night of the stay."
+        )
+
+    else:
+        add_message(
+            "assistant",
+            f"Do you have a {room.name} available for "
+            f"{requirement.rooms} room(s)?"
+        )
+
+        add_message(
+            "hotel",
+            f"Yes, {room.name} is available for the requested dates."
+        )
+
+    # Determine stored services and facilities
+    services = [
+        str(item).strip().casefold().replace("_", " ")
+        for item in room.included_services
+    ]
+
+    room_facilities = list(
+        room.facilities.values_list("name", flat=True)
+    )
+
+    hotel_facilities = list(
+        hotel.hotel_facilities.values_list("facility__name", flat=True)
+    )
+
+    all_facilities = {
+        str(item).strip().casefold().replace("_", " ")
+        for item in services + room_facilities + hotel_facilities
+    }
+
+    breakfast = room.breakfast_included
+
+    airport_pickup = (
+        True
+        if any(
+            "airport pickup" in item or "airport transfer" in item
+            for item in all_facilities
+        )
+        else None
+    )
+
+    # Simulated conversation questions
+    add_message(
+        "assistant",
+        "Is breakfast included in the room price?"
+    )
+
+    add_message(
+        "hotel",
+        (
+            "Yes, breakfast is included."
+            if breakfast
+            else "Breakfast is not included according to the room information."
+        )
+    )
+
+    add_message(
+        "assistant",
+        "Do you provide airport pickup?"
+    )
+
+    add_message(
+        "hotel",
+        (
+            "Airport pickup is listed among the hotel's services."
+            if airport_pickup is True
+            else "Airport pickup information is not recorded."
+        )
+    )
+
+       # Read hotel check-in and check-out times safely
+    check_in_time = (
+        hotel.check_in_time.strftime("%H:%M")
+        if hotel.check_in_time
+        else None
+    )
+
+    check_out_time = (
+        hotel.check_out_time.strftime("%H:%M")
+        if hotel.check_out_time
+        else None
+    )
+
+    add_message(
+        "assistant",
+        "Could you confirm your check-in and check-out times?"
+    )
+
+    if check_in_time and check_out_time:
+        add_message(
+            "hotel",
+            f"Check-in: {check_in_time}. Check-out: {check_out_time}."
+        )
+    else:
+        add_message(
+            "hotel",
+            "Check-in and check-out times are not recorded."
+        )
+
+    # Calculate conservative quoted price per room per night
+    quoted_price = max(nightly_prices) if nightly_prices else None
+
+    response_data = {
+        "availability": all_nights_available,
+        "room_type": room.name,
+        "rooms_requested": requirement.rooms,
+        "guests": {
+            "adults": requirement.adults,
+            "children": requirement.children,
+        },
+        "breakfast_included": breakfast,
+        "airport_pickup": airport_pickup,
+        "quoted_price_per_room_per_night": (
+            str(quoted_price) if quoted_price is not None else None
+        ),
+        "estimated_total_per_night": (
+            str(quoted_price * requirement.rooms)
+            if quoted_price is not None else None
+        ),
+        "currency": room.currency,
+        "check_in_time": check_in_time,
+        "check_out_time": check_out_time,
+        "simulation": True,
+    }
+
+    call.transcript = transcript
+    call.response_data = response_data
+    call.status = HotelCall.Status.COMPLETED
+    call.completed_at = timezone.now()
+    call.failure_reason = ""
+
+    call.save(update_fields=[
+        "transcript",
+        "response_data",
+        "status",
+        "completed_at",
+        "failure_reason",
+        "updated_at",
+    ])
+
+    # Update matching workflow status
+    if all_nights_available:
+        match.status = HotelMatch.Status.RESPONDED
+    else:
+        match.status = HotelMatch.Status.UNAVAILABLE
+
+    match.save(update_fields=["status", "updated_at"])
+
+    return call

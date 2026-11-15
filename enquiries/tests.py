@@ -8,7 +8,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from hotels.models import Organisation, Membership, Hotel, RoomType, RoomAvailability
-from .models import TravellerRequirement, HotelMatch
+from .models import TravellerRequirement, HotelMatch,HotelCall
 from .services import generate_hotel_matches
 
 User = get_user_model()
@@ -257,4 +257,268 @@ class HotelMatchAPITests(APITestCase):
         )
         self.assertTrue(
             HotelMatch.objects.filter(pk=existing_match.pk).exists()
+        )
+
+class HotelCallAPITests(APITestCase):
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="callowner",
+            email="callowner@example.com",
+            password="TestPassword123!"
+        )
+
+        self.organisation = Organisation.objects.create(
+            name="Call Test Organisation",
+            created_by=self.user,
+            status="active"
+        )
+
+        Membership.objects.create(
+            organisation=self.organisation,
+            user=self.user,
+            role="owner",
+            is_active=True
+        )
+
+        self.hotel = Hotel.objects.create(
+            organisation=self.organisation,
+            name="Call Test Hotel",
+            hotel_type="hotel",
+            star_rating=3,
+            country="Nepal",
+            province="Gandaki",
+            city="Pokhara",
+            area="Lakeside",
+            address="Test address, Pokhara, Nepal",
+            contact_phone="+9779800000000",
+            status="active",
+            is_verified=True,
+        )
+
+        self.room_type = RoomType.objects.create(
+            hotel=self.hotel,
+            name="Call Test Double Room",
+            max_occupancy=2,
+            adult_capacity=2,
+            child_capacity=0,
+            total_rooms=2,
+            bed_type="double",
+            number_of_beds=1,
+            base_price_per_night=Decimal("6000.00"),
+            currency="NPR",
+            breakfast_included=True,
+            included_services=["breakfast", "airport_pickup"],
+            is_active=True,
+        )
+
+        self.requirement = TravellerRequirement.objects.create(
+            user=self.user,
+            country="Nepal",
+            province="Gandaki",
+            city="Pokhara",
+            area="Lakeside",
+            check_in_date=date.today() + timedelta(days=10),
+            check_out_date=date.today() + timedelta(days=12),
+            adults=2,
+            children=0,
+            rooms=1,
+            max_budget_per_night=Decimal("8000.00"),
+            currency="NPR",
+            preferred_hotel_types=["hotel"],
+            required_facilities=["breakfast"],
+        )
+
+        for day_offset in range(2):
+            RoomAvailability.objects.create(
+                room_type=self.room_type,
+                date=self.requirement.check_in_date + timedelta(days=day_offset),
+                available_rooms=2,
+                price_per_night=Decimal("6000.00"),
+                is_available=True,
+            )
+
+        self.match = HotelMatch.objects.create(
+            requirement=self.requirement,
+            hotel=self.hotel,
+            matched_room_type=self.room_type,
+            match_score=80,
+            match_reasons=["Test match"],
+            estimated_price_per_night=Decimal("6000.00"),
+            currency="NPR",
+            status=HotelMatch.Status.SHORTLISTED,
+        )
+
+        self.client.force_authenticate(user=self.user)
+
+        self.calls_url = (
+            f"/api/enquiries/matches/{self.match.id}/calls/"
+        )
+
+    def create_call(self):
+        response = self.client.post(
+            self.calls_url,
+            {},
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED
+        )
+
+        return response.data["id"]
+
+    def test_queued_call_can_be_simulated(self):
+        call_id = self.create_call()
+
+        response = self.client.post(
+            f"/api/enquiries/calls/{call_id}/simulate/",
+            {},
+            format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["status"],
+            HotelCall.Status.COMPLETED
+        )
+
+        self.assertGreater(
+            len(response.data["transcript"]),
+            0
+        )
+
+        self.assertTrue(
+            response.data["response_data"]["availability"]
+        )
+
+        self.assertEqual(
+            response.data["response_data"][
+                "quoted_price_per_room_per_night"
+            ],
+            "6000.00"
+        )
+
+        self.match.refresh_from_db()
+
+        self.assertEqual(
+            self.match.status,
+            HotelMatch.Status.RESPONDED
+        )
+
+    def test_unavailable_room_is_recorded(self):
+        RoomAvailability.objects.filter(
+            room_type=self.room_type,
+            date=self.requirement.check_in_date + timedelta(days=1)
+        ).update(is_available=False)
+
+        call_id = self.create_call()
+
+        response = self.client.post(
+            f"/api/enquiries/calls/{call_id}/simulate/",
+            {},
+            format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.assertEqual(
+            response.data["status"],
+            HotelCall.Status.COMPLETED
+        )
+
+        self.assertFalse(
+            response.data["response_data"]["availability"]
+        )
+
+        self.match.refresh_from_db()
+
+        self.assertEqual(
+            self.match.status,
+            HotelMatch.Status.UNAVAILABLE
+        )
+
+    def test_missing_room_type_fails_call(self):
+        self.match.matched_room_type = None
+        self.match.save(update_fields=["matched_room_type"])
+
+        call_id = self.create_call()
+
+        response = self.client.post(
+            f"/api/enquiries/calls/{call_id}/simulate/",
+            {},
+            format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.assertEqual(
+            response.data["status"],
+            HotelCall.Status.FAILED
+        )
+
+        self.assertEqual(
+            response.data["failure_reason"],
+            "No matched room type is available."
+        )
+
+    def test_completed_call_cannot_be_simulated_twice(self):
+        call_id = self.create_call()
+
+        first_response = self.client.post(
+            f"/api/enquiries/calls/{call_id}/simulate/",
+            {},
+            format="json"
+        )
+
+        second_response = self.client.post(
+            f"/api/enquiries/calls/{call_id}/simulate/",
+            {},
+            format="json"
+        )
+
+        self.assertEqual(
+            first_response.status_code,
+            status.HTTP_200_OK
+        )
+
+        self.assertEqual(
+            second_response.status_code,
+            status.HTTP_400_BAD_REQUEST
+        )
+
+    def test_failed_call_can_be_retried(self):
+        self.match.matched_room_type = None
+        self.match.save(update_fields=["matched_room_type"])
+
+        first_call_id = self.create_call()
+
+        first_response = self.client.post(
+            f"/api/enquiries/calls/{first_call_id}/simulate/",
+            {},
+            format="json"
+        )
+
+        self.assertEqual(
+            first_response.data["status"],
+            HotelCall.Status.FAILED
+        )
+
+        # Create a second attempt after the first has failed
+        second_call_id = self.create_call()
+
+        second_call = HotelCall.objects.get(pk=second_call_id)
+
+        self.assertEqual(second_call.attempt_number, 2)
+        self.assertEqual(
+            second_call.status,
+            HotelCall.Status.QUEUED
+        )
+
+        self.assertEqual(
+            HotelCall.objects.filter(
+                hotel_match=self.match
+            ).count(),
+            2
         )

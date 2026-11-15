@@ -1,7 +1,7 @@
 
 from rest_framework import serializers
-from .models import TravellerRequirement
-from .models import TravellerRequirement, HotelMatch
+
+from .models import TravellerRequirement, HotelMatch, HotelCall
 
 class TravellerRequirementSerializer(serializers.ModelSerializer):
 
@@ -130,3 +130,36 @@ class HotelMatchSerializer(serializers.ModelSerializer):
             "currency": room.currency,
             "breakfast_included": room.breakfast_included,
         }
+class HotelCallSerializer(serializers.ModelSerializer):
+
+    hotel_name = serializers.CharField(
+        source="hotel_match.hotel.name",
+        read_only=True
+    )
+
+    requirement_id = serializers.IntegerField(
+        source="hotel_match.requirement.id",
+        read_only=True
+    )
+
+    class Meta:
+        model = HotelCall
+
+        fields = [
+            "id",
+            "hotel_match",
+            "hotel_name",
+            "requirement_id",
+            "attempt_number",
+            "status",
+            "mode",
+            "transcript",
+            "response_data",
+            "failure_reason",
+            "started_at",
+            "completed_at",
+            "created_at",
+            "updated_at",
+        ]
+
+        read_only_fields = fields
