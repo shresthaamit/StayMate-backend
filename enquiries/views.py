@@ -1,4 +1,4 @@
-
+from django.db.models import Prefetch
 from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
@@ -8,7 +8,7 @@ from django.shortcuts import get_object_or_404
 from django.db import transaction
 from rest_framework.exceptions import ValidationError
 
-from .serializers import HotelMatchSerializer,TravellerRequirementSerializer, HotelCallSerializer
+from .serializers import HotelMatchSerializer,TravellerRequirementSerializer, HotelCallSerializer,TravellerResultSerializer
 from .services import generate_hotel_matches,run_simulated_hotel_call
 from .models import TravellerRequirement, HotelCall, HotelMatch
 
@@ -167,4 +167,67 @@ class HotelCallSimulateView(APIView):
         return Response(
             serializer.data,
             status=status.HTTP_200_OK
+        )
+class TravellerResultsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, requirement_id):
+
+        # Only allow the owner of the requirement to view results.
+        requirement = get_object_or_404(
+            TravellerRequirement,
+            pk=requirement_id,
+            user=request.user,
+        )
+
+        # Fetch matches and their related data efficiently.
+        matches = (
+            HotelMatch.objects.filter(
+                requirement=requirement
+            )
+            .select_related(
+                "hotel",
+                "matched_room_type",
+                "requirement",
+            )
+            .prefetch_related(
+                "hotel__hotel_facilities__facility",
+                "matched_room_type__facilities",
+                Prefetch(
+                    "calls",
+                    queryset=HotelCall.objects.order_by(
+                        "-created_at",
+                        "-id",
+                    ),
+                    to_attr="ordered_calls",
+                ),
+            )
+            .order_by("-match_score", "created_at")
+        )
+
+        serializer = TravellerResultSerializer(
+            matches,
+            many=True,
+        )
+
+        return Response(
+            {
+                "requirement_id": requirement.id,
+                "destination": {
+                    "country": requirement.country,
+                    "province": requirement.province,
+                    "city": requirement.city,
+                    "area": requirement.area,
+                },
+                "check_in_date": requirement.check_in_date,
+                "check_out_date": requirement.check_out_date,
+                "guests": {
+                    "adults": requirement.adults,
+                    "children": requirement.children,
+                    "rooms": requirement.rooms,
+                },
+                "total_matches": matches.count(),
+                "results": serializer.data,
+            },
+            status=status.HTTP_200_OK,
         )

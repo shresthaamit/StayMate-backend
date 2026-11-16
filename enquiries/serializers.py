@@ -163,3 +163,89 @@ class HotelCallSerializer(serializers.ModelSerializer):
         ]
 
         read_only_fields = fields
+
+class TravellerResultSerializer(serializers.ModelSerializer):
+    hotel = serializers.SerializerMethodField()
+    matched_room_type = serializers.SerializerMethodField()
+    latest_call = serializers.SerializerMethodField()
+
+    class Meta:
+        model = HotelMatch
+        fields = [
+            "id",
+            "match_score",
+            "match_reasons",
+            "estimated_price_per_night",
+            "currency",
+            "status",
+            "hotel",
+            "matched_room_type",
+            "latest_call",
+            "created_at",
+        ]
+
+    def get_hotel(self, obj):
+        hotel = obj.hotel
+
+        facilities = [
+            item.facility.name
+            for item in hotel.hotel_facilities.all()
+        ]
+
+        return {
+            "id": hotel.id,
+            "name": hotel.name,
+            "description": hotel.description,
+            "hotel_type": hotel.hotel_type,
+            "star_rating": hotel.star_rating,
+            "website": hotel.website,
+            "country": hotel.country,
+            "province": hotel.province,
+            "city": hotel.city,
+            "area": hotel.area,
+            "address": hotel.address,
+            "latitude": hotel.latitude,
+            "longitude": hotel.longitude,
+            "contact_phone": hotel.contact_phone,
+            "alternative_phone": hotel.alternative_phone,
+            "contact_email": hotel.contact_email,
+            "check_in_time": hotel.check_in_time,
+            "check_out_time": hotel.check_out_time,
+            "facilities": facilities,
+        }
+
+    def get_matched_room_type(self, obj):
+        room = obj.matched_room_type
+
+        if room is None:
+            return None
+
+        facilities = [
+            facility.name
+            for facility in room.facilities.all()
+        ]
+
+        return {
+            "id": room.id,
+            "name": room.name,
+            "description": room.description,
+            "max_occupancy": room.max_occupancy,
+            "adult_capacity": room.adult_capacity,
+            "child_capacity": room.child_capacity,
+            "bed_type": room.bed_type,
+            "number_of_beds": room.number_of_beds,
+            "base_price_per_night": room.base_price_per_night,
+            "currency": room.currency,
+            "breakfast_included": room.breakfast_included,
+            "included_services": room.included_services,
+            "facilities": facilities,
+        }
+
+    def get_latest_call(self, obj):
+        # The view preloads calls in newest-first order.
+        calls = getattr(obj, "ordered_calls", [])
+
+        if not calls:
+            return None
+
+        return HotelCallSerializer(calls[0]).data
