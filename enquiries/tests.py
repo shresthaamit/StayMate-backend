@@ -1,7 +1,6 @@
 
 from datetime import date, timedelta
 from decimal import Decimal
-
 from django.contrib.auth import get_user_model
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -653,6 +652,456 @@ class TravellerResultsAPITests(APITestCase):
         )
 
         self.client.force_authenticate(user=self.user)
+
+    def create_comparison_match(self, name="Comparison Test Hotel"):
+        hotel = Hotel.objects.create(
+            organisation=self.organisation,
+            name=name,
+            hotel_type="resort",
+            star_rating=4,
+            country="Nepal",
+            province="Gandaki",
+            city="Pokhara",
+            area="Lakeside",
+            address="Comparison test address, Pokhara, Nepal",
+            contact_phone="+9779800000001",
+            status="active",
+            is_verified=True,
+        )
+
+        room = RoomType.objects.create(
+            hotel=hotel,
+            name="Comparison Test Room",
+            max_occupancy=2,
+            adult_capacity=2,
+            child_capacity=0,
+            total_rooms=2,
+            bed_type="double",
+            number_of_beds=1,
+            base_price_per_night=Decimal("4500.00"),
+            currency="NPR",
+            breakfast_included=False,
+            included_services=[],
+            is_active=True,
+        )
+
+        return HotelMatch.objects.create(
+            requirement=self.requirement,
+            hotel=hotel,
+            matched_room_type=room,
+            match_score=90,
+            match_reasons=["Comparison test match"],
+            estimated_price_per_night=Decimal("4500.00"),
+            currency="NPR",
+            status=HotelMatch.Status.RESPONDED,
+        )
+    def test_owner_can_compare_two_hotels(self):
+        second_match = self.create_comparison_match()
+
+        response = self.client.get(
+            f"/api/enquiries/{self.requirement.id}/compare/",
+            {"match_ids": f"{self.match.id},{second_match.id}"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["total_compared"], 2)
+        self.assertEqual(len(response.data["results"]), 2)
+
+    def test_comparison_preserves_selected_order(self):
+        second_match = self.create_comparison_match()
+
+        response = self.client.get(
+            f"/api/enquiries/{self.requirement.id}/compare/",
+            {"match_ids": f"{second_match.id},{self.match.id}"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            [item["id"] for item in response.data["results"]],
+            [second_match.id, self.match.id]
+        )
+
+    def test_comparison_requires_at_least_two_matches(self):
+        response = self.client.get(
+            f"/api/enquiries/{self.requirement.id}/compare/",
+            {"match_ids": str(self.match.id)}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_comparison_allows_maximum_four_matches(self):
+        second = self.create_comparison_match("Comparison Hotel 2")
+        third = self.create_comparison_match("Comparison Hotel 3")
+        fourth = self.create_comparison_match("Comparison Hotel 4")
+
+        response = self.client.get(
+            f"/api/enquiries/{self.requirement.id}/compare/",
+            {
+                "match_ids": (
+                    f"{self.match.id},{second.id},"
+                    f"{third.id},{fourth.id}"
+                )
+            }
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["total_compared"], 4)
+
+    def test_comparison_rejects_more_than_four_matches(self):
+        second = self.create_comparison_match("Comparison Hotel 2")
+        third = self.create_comparison_match("Comparison Hotel 3")
+        fourth = self.create_comparison_match("Comparison Hotel 4")
+        fifth = self.create_comparison_match("Comparison Hotel 5")
+
+        response = self.client.get(
+            f"/api/enquiries/{self.requirement.id}/compare/",
+            {
+                "match_ids": (
+                    f"{self.match.id},{second.id},"
+                    f"{third.id},{fourth.id},{fifth.id}"
+                )
+            }
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_comparison_rejects_duplicate_ids(self):
+        response = self.client.get(
+            f"/api/enquiries/{self.requirement.id}/compare/",
+            {"match_ids": f"{self.match.id},{self.match.id}"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_comparison_rejects_invalid_ids(self):
+        response = self.client.get(
+            f"/api/enquiries/{self.requirement.id}/compare/",
+            {"match_ids": "abc,xyz"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_comparison_rejects_match_from_another_requirement(self):
+        other_requirement = TravellerRequirement.objects.create(
+            user=self.other_user,
+            country="Nepal",
+            province="Gandaki",
+            city="Pokhara",
+            area="Lakeside",
+            check_in_date=date.today() + timedelta(days=10),
+            check_out_date=date.today() + timedelta(days=12),
+            adults=2,
+            children=0,
+            rooms=1,
+            max_budget_per_night=Decimal("8000.00"),
+            currency="NPR",
+            preferred_hotel_types=["hotel"],
+            required_facilities=["breakfast"],
+        )
+
+        other_match = HotelMatch.objects.create(
+            requirement=other_requirement,
+            hotel=self.hotel,
+            matched_room_type=self.room_type,
+            match_score=70,
+            match_reasons=["Other requirement test"],
+            estimated_price_per_night=Decimal("6000.00"),
+            currency="NPR",
+            status=HotelMatch.Status.RESPONDED,
+        )
+
+        response = self.client.get(
+            f"/api/enquiries/{self.requirement.id}/compare/",
+            {"match_ids": f"{self.match.id},{other_match.id}"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_another_user_cannot_compare_requirement(self):
+        self.client.force_authenticate(user=self.other_user)
+
+        response = self.client.get(
+            f"/api/enquiries/{self.requirement.id}/compare/",
+            {"match_ids": str(self.match.id) + ",999"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_unauthenticated_user_cannot_compare_hotels(self):
+        self.client.force_authenticate(user=None)
+
+        second_match = self.create_comparison_match()
+
+        response = self.client.get(
+            f"/api/enquiries/{self.requirement.id}/compare/",
+            {"match_ids": f"{self.match.id},{second_match.id}"}
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_401_UNAUTHORIZED
+        )
+    def create_additional_match(
+        self,
+        name="Second Results Hotel",
+        hotel_type="resort",
+        star_rating=4,
+        price="4000.00",
+        match_score=90,
+        breakfast_included=False,
+    ):
+        hotel = Hotel.objects.create(
+            organisation=self.organisation,
+            name=name,
+            hotel_type=hotel_type,
+            star_rating=star_rating,
+            country="Nepal",
+            province="Gandaki",
+            city="Pokhara",
+            area="Lakeside",
+            address="Second test address, Pokhara, Nepal",
+            contact_phone="+9779800000001",
+            status="active",
+            is_verified=True,
+        )
+
+        room = RoomType.objects.create(
+            hotel=hotel,
+            name="Second Test Room",
+            max_occupancy=2,
+            adult_capacity=2,
+            child_capacity=0,
+            total_rooms=2,
+            bed_type="double",
+            number_of_beds=1,
+            base_price_per_night=Decimal(price),
+            currency="NPR",
+            breakfast_included=breakfast_included,
+            included_services=[],
+            is_active=True,
+        )
+
+        return HotelMatch.objects.create(
+            requirement=self.requirement,
+            hotel=hotel,
+            matched_room_type=room,
+            match_score=match_score,
+            match_reasons=["Additional test match"],
+            estimated_price_per_night=Decimal(price),
+            currency="NPR",
+            status=HotelMatch.Status.RESPONDED,
+        )
+
+
+    def test_filter_by_minimum_price(self):
+        response = self.client.get(
+            self.url,
+            {"min_price": "5000"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["total_matches"], 1)
+
+    def test_filter_by_maximum_price(self):
+        response = self.client.get(
+            self.url,
+            {"max_price": "5000"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["total_matches"], 0)
+
+    def test_filter_by_price_range(self):
+        self.create_additional_match(price="4000.00")
+
+        response = self.client.get(
+            self.url,
+            {
+                "min_price": "3000",
+                "max_price": "5000",
+            }
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["total_matches"], 1)
+        self.assertEqual(
+            response.data["results"][0]["estimated_price_per_night"],
+            "4000.00"
+        )
+
+    def test_filter_by_minimum_star_rating(self):
+        response = self.client.get(
+            self.url,
+            {"min_star_rating": "4"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["total_matches"], 0)
+
+    def test_filter_by_hotel_type(self):
+        response = self.client.get(
+            self.url,
+            {"hotel_type": "HOTEL"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["total_matches"], 1)
+
+    def test_filter_by_breakfast_included(self):
+        response = self.client.get(
+            self.url,
+            {"breakfast_included": "true"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["total_matches"], 1)
+
+    def test_filter_by_airport_pickup_true(self):
+        HotelCall.objects.create(
+            hotel_match=self.match,
+            attempt_number=1,
+            response_data={"airport_pickup": True},
+        )
+
+        response = self.client.get(
+            self.url,
+            {"airport_pickup": "true"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["total_matches"], 1)
+
+    def test_filter_by_airport_pickup_false(self):
+        HotelCall.objects.create(
+            hotel_match=self.match,
+            attempt_number=1,
+            response_data={"airport_pickup": False},
+        )
+
+        response = self.client.get(
+            self.url,
+            {"airport_pickup": "false"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["total_matches"], 1)
+
+    def test_unknown_airport_pickup_does_not_match_false(self):
+        HotelCall.objects.create(
+            hotel_match=self.match,
+            attempt_number=1,
+            response_data={},
+        )
+
+        response = self.client.get(
+            self.url,
+            {"airport_pickup": "false"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["total_matches"], 0)
+
+    
+    def test_sort_by_price_ascending(self):
+        self.create_additional_match(price="4000.00")
+
+        response = self.client.get(
+            self.url,
+            {"sort_by": "price", "order": "asc"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        prices = [
+            Decimal(item["estimated_price_per_night"])
+            for item in response.data["results"]
+        ]
+
+        self.assertEqual(prices, [Decimal("4000.00"), Decimal("6000.00")])
+
+    def test_sort_by_match_score_descending(self):
+        self.create_additional_match(
+            price="4000.00",
+            match_score=90,
+        )
+
+        response = self.client.get(
+            self.url,
+            {"sort_by": "match_score", "order": "desc"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        scores = [
+            item["match_score"]
+            for item in response.data["results"]
+        ]
+
+        self.assertEqual(scores, [90, 80])
+
+    def test_sort_by_star_rating_descending(self):
+        self.create_additional_match(
+            price="4000.00",
+            star_rating=4,
+        )
+
+        response = self.client.get(
+            self.url,
+            {"sort_by": "star_rating", "order": "desc"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        ratings = [
+            item["hotel"]["star_rating"]
+            for item in response.data["results"]
+        ]
+
+        self.assertEqual(ratings, [4, 3])
+
+    def test_invalid_sort_field_returns_bad_request(self):
+        response = self.client.get(
+            self.url,
+            {"sort_by": "invalid"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_invalid_price_returns_bad_request(self):
+        response = self.client.get(
+            self.url,
+            {"min_price": "abc"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_minimum_price_cannot_exceed_maximum_price(self):
+        response = self.client.get(
+            self.url,
+            {
+                "min_price": "9000",
+                "max_price": "3000",
+            }
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_invalid_boolean_filter_returns_bad_request(self):
+        response = self.client.get(
+            self.url,
+            {"breakfast_included": "yes"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_order_requires_sort_field(self):
+        response = self.client.get(
+            self.url,
+            {"order": "asc"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
 
     def test_owner_can_retrieve_results(self):
         response = self.client.get(self.url)

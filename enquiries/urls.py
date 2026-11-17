@@ -3,7 +3,7 @@ from django.urls import path
 
 from .views import (
     TravellerRequirementListCreateView,
-    TravellerRequirementDetailView,  HotelMatchGenerateView,HotelCallListCreateView,HotelCallDetailView, HotelCallSimulateView, TravellerResultsView
+    TravellerRequirementDetailView,  HotelMatchGenerateView,HotelCallListCreateView,HotelCallDetailView, HotelCallSimulateView, TravellerResultsView,TravellerHotelCompareView
 )
 
 urlpatterns = [
@@ -43,4 +43,11 @@ path(
     TravellerResultsView.as_view(),
     name="requirement-results",
 ),
+
+path(
+    "<int:requirement_id>/compare/",
+    TravellerHotelCompareView.as_view(),
+    name="requirement-compare",
+),
+
 ]
