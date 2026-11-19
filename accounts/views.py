@@ -19,9 +19,11 @@ class RegisterView(generics.CreateAPIView):
 
 class EmailLoginView(TokenObtainPairView):
     serializer_class = EmailTokenObtainPairSerializer
+    permission_classes = [AllowAny]
+    throttle_scope = 'login'
 
 class PhoneOTPRequestView(APIView):
-
+    throttle_scope = 'otp_request'
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -49,6 +51,7 @@ class PhoneOTPRequestView(APIView):
 class PhoneOTPVerifyView(APIView):
 
     permission_classes = [AllowAny]
+    throttle_scope = 'otp_verify'
 
     def post(self, request):
 

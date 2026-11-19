@@ -1,8 +1,7 @@
-
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import generics
 from django.db.models import Prefetch
 from django.utils import timezone
-from .models import Hotel, RoomType
 from .serializers import (
     HotelListSerializer,
     HotelDetailSerializer,HotelCreateSerializer,HotelUpdateSerializer,
@@ -18,7 +17,7 @@ from .permissions import IsActiveOrganisationMember,IsOrganisationOwnerOrAdmin
 class PublicHotelListView(generics.ListAPIView):
 
     serializer_class = HotelListSerializer
-
+    permission_classes = [AllowAny]
     def get_queryset(self):
         return Hotel.objects.filter(
             status=Hotel.Status.ACTIVE,
@@ -34,7 +33,7 @@ class PublicHotelListView(generics.ListAPIView):
 class PublicHotelDetailView(generics.RetrieveAPIView):
 
     serializer_class = HotelDetailSerializer
-
+    permission_classes = [AllowAny]
     def get_queryset(self):
         return Hotel.objects.filter(
             status=Hotel.Status.ACTIVE,
