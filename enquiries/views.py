@@ -220,9 +220,17 @@ class TravellerResultsView(APIView):
         try:
             min_price = Decimal(min_price) if min_price is not None else None
             max_price = Decimal(max_price) if max_price is not None else None
-        except InvalidOperation:
+        except (InvalidOperation, ValueError):
             raise ValidationError(
                 {"price": "Price filters must be valid numbers."}
+            )
+
+        if (
+            (min_price is not None and not min_price.is_finite())
+            or (max_price is not None and not max_price.is_finite())
+        ):
+            raise ValidationError(
+                {"price": "Price filters must be finite numbers."}
             )
 
         if (
@@ -265,7 +273,7 @@ class TravellerResultsView(APIView):
             if value is None:
                 return None
 
-            value = value.lower()
+            value = value.strip().lower()
 
             if value not in ["true", "false"]:
                 raise ValidationError(
@@ -282,6 +290,14 @@ class TravellerResultsView(APIView):
 
         # Hotel type filter.
         hotel_type = request.query_params.get("hotel_type")
+
+        if hotel_type is not None:
+            hotel_type = hotel_type.strip()
+
+            if not hotel_type:
+                raise ValidationError(
+                    {"hotel_type": "Hotel type cannot be empty."}
+                )
 
         # Apply filters.
         filtered_results = []
