@@ -436,3 +436,68 @@ class HotelDeleteView(generics.DestroyAPIView):
                 "updated_at",
             ]
         )
+
+
+# ==========================================================
+# DESTINATION-BASED HOTEL SEARCH
+# GET /api/hotels/search/
+# ==========================================================
+
+class DestinationHotelListView(APIView):
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+
+        # Read destination parameters
+        city = request.query_params.get("city", "").strip()
+        area = request.query_params.get("area", "").strip()
+
+        # At least one destination field is required
+        if not city and not area:
+            return Response(
+                {
+                    "error": "Please provide at least a city or area."
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Retrieve publicly visible hotels
+        hotels = Hotel.objects.filter(
+            status=Hotel.Status.ACTIVE,
+            is_verified=True,
+            organisation__status="active",
+            is_deleted=False,
+        ).select_related(
+            "organisation"
+        )
+
+        # Filter by city
+        if city:
+            hotels = hotels.filter(
+                city__icontains=city
+            )
+
+        # Filter by area
+        if area:
+            hotels = hotels.filter(
+                area__icontains=area
+            )
+
+        # Keep results in a predictable order
+        hotels = hotels.order_by("name")
+
+        # Serialize hotel information
+        results = HotelListSerializer(
+            hotels,
+            many=True
+        ).data
+
+        return Response({
+            "count": len(results),
+            "search_destination": {
+                "city": city or None,
+                "area": area or None,
+            },
+            "results": results,
+        })

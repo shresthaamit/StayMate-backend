@@ -314,3 +314,73 @@ class NearbyHotelAPITests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["radius_km"], 10.0)
         self.assertEqual(response.data["sort_order"], "asc")
+
+
+    def destination_search(self, **params):
+        return self.client.get(
+            "/api/hotels/search/",
+            params
+        )
+
+
+    def test_destination_search_by_city(self):
+        response = self.destination_search(city="Pokhara")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(
+            response.data["results"][0]["name"],
+            "Nearby Verified Hotel",
+        )
+
+    def test_destination_search_by_area(self):
+        response = self.destination_search(area="Lakeside")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+
+    def test_destination_search_by_city_and_area(self):
+        response = self.destination_search(
+            city="Pokhara",
+            area="Lakeside",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+
+    def test_destination_search_does_not_require_coordinates(self):
+        self.create_hotel(
+            name="Hotel Without GPS",
+            latitude=None,
+            longitude=None,
+        )
+
+        response = self.destination_search(city="Pokhara")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 2)
+
+    def test_destination_search_requires_city_or_area(self):
+        response = self.destination_search()
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_destination_search_excludes_unverified_hotels(self):
+        self.create_hotel(
+            name="Unverified Destination Hotel",
+            latitude=Decimal("28.2100"),
+            longitude=Decimal("83.9856"),
+            is_verified=False,
+        )
+
+        response = self.destination_search(city="Pokhara")
+
+        hotel_names = [
+            hotel["name"]
+            for hotel in response.data["results"]
+        ]
+
+        self.assertNotIn(
+            "Unverified Destination Hotel",
+            hotel_names,
+        )

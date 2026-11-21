@@ -1,7 +1,8 @@
 from django.urls import path
 
 from .views import (
-    PublicHotelListView,PublicHotelDetailView,OrganisationHotelListView,OrganisationHotelDetailView,HotelCreateView,HotelUpdateView,HotelDeleteView
+    PublicHotelListView,PublicHotelDetailView,OrganisationHotelListView,
+    OrganisationHotelDetailView,HotelCreateView,HotelUpdateView,HotelDeleteView,NearbyHotelListView,DestinationHotelListView
 )
 
 urlpatterns = [
@@ -29,4 +30,15 @@ path(
     HotelDeleteView.as_view(),
     name="organisation-hotel-delete",
 ),
+path(
+    "nearby/",
+    NearbyHotelListView.as_view(),
+    name="nearby-hotels",
+),
+path(
+    "search/",
+    DestinationHotelListView.as_view(),
+    name="destination-hotel-search"
+),
+
 ]
