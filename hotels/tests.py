@@ -1,6 +1,4 @@
-
 from decimal import Decimal
-
 from django.test import TestCase
 from rest_framework.test import APIClient
 
@@ -384,3 +382,161 @@ class NearbyHotelAPITests(TestCase):
             "Unverified Destination Hotel",
             hotel_names,
         )
+    # -------------------------
+    # Pagination tests
+    # -------------------------
+
+    def test_destination_search_paginates_first_page(self):
+        self.create_hotel(
+            name="Alpha Hotel",
+        )
+        self.create_hotel(
+            name="Bravo Hotel",
+        )
+
+        response = self.destination_search(
+            city="Pokhara",
+            page="1",
+            page_size="2",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 3)
+        self.assertEqual(len(response.data["results"]), 2)
+
+        self.assertIsNotNone(response.data["next"])
+        self.assertIsNone(response.data["previous"])
+
+        self.assertEqual(
+            response.data["search_destination"]["city"],
+            "Pokhara",
+        )
+
+        # These two hotels have no coordinates.
+        self.assertEqual(response.data["map_markers"], [])
+
+    def test_destination_search_paginates_second_page(self):
+        self.create_hotel(
+            name="Alpha Hotel",
+        )
+        self.create_hotel(
+            name="Bravo Hotel",
+        )
+
+        response = self.destination_search(
+            city="Pokhara",
+            page="2",
+            page_size="2",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 3)
+        self.assertEqual(len(response.data["results"]), 1)
+
+        self.assertIsNone(response.data["next"])
+        self.assertIsNotNone(response.data["previous"])
+
+        self.assertEqual(
+            response.data["results"][0]["name"],
+            "Nearby Verified Hotel",
+        )
+
+        # The remaining hotel has coordinates, so it gets a map marker.
+        self.assertEqual(len(response.data["map_markers"]), 1)
+        self.assertEqual(
+            response.data["map_markers"][0]["id"],
+            self.nearby_hotel.id,
+        )
+
+    def test_nearby_search_paginates_and_preserves_metadata(self):
+        self.create_hotel(
+            name="Farther Hotel",
+            latitude=Decimal("28.2096"),
+            longitude=Decimal("83.9900"),
+        )
+
+        self.create_hotel(
+            name="Farthest Hotel",
+            latitude=Decimal("28.2096"),
+            longitude=Decimal("84.0000"),
+        )
+
+        response = self.search(
+            page="1",
+            page_size="1",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 3)
+        self.assertEqual(len(response.data["results"]), 1)
+
+        self.assertEqual(
+            response.data["results"][0]["name"],
+            "Nearby Verified Hotel",
+        )
+
+        self.assertIsNotNone(response.data["next"])
+        self.assertIsNone(response.data["previous"])
+
+        # Existing search metadata must remain available.
+        self.assertEqual(response.data["radius_km"], 10.0)
+        self.assertEqual(response.data["sort_order"], "asc")
+        self.assertEqual(
+            response.data["search_location"]["latitude"],
+            28.2096,
+        )
+
+        # Only the current page's hotel appears as a map marker.
+        self.assertEqual(len(response.data["map_markers"]), 1)
+
+    def test_nearby_search_preserves_descending_order_with_pagination(self):
+        self.create_hotel(
+            name="Farther Hotel",
+            latitude=Decimal("28.2096"),
+            longitude=Decimal("83.9900"),
+        )
+
+        self.create_hotel(
+            name="Farthest Hotel",
+            latitude=Decimal("28.2096"),
+            longitude=Decimal("84.0000"),
+        )
+
+        response = self.search(
+            sort_order="desc",
+            page="1",
+            page_size="1",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["sort_order"], "desc")
+
+        self.assertEqual(
+            response.data["results"][0]["name"],
+            "Farthest Hotel",
+        )
+
+        self.assertIsNotNone(response.data["next"])
+
+    def test_pagination_enforces_maximum_page_size(self):
+        # Create 50 additional hotels.
+        for number in range(50):
+            self.create_hotel(
+                name=f"Pagination Hotel {number:02d}",
+            )
+
+        response = self.destination_search(
+            city="Pokhara",
+            page_size="100",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        # 50 is the configured maximum page size.
+        self.assertEqual(len(response.data["results"]), 50)
+
+        # There are 51 hotels in total.
+        self.assertEqual(response.data["count"], 51)
+
+        # One hotel remains on the next page.
+        self.assertIsNotNone(response.data["next"])

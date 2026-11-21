@@ -9,7 +9,7 @@ from .serializers import (
 from .models import Hotel, RoomType, Membership
 from .permissions import IsActiveOrganisationMember,IsOrganisationOwnerOrAdmin
 import math
-
+from rest_framework.pagination import PageNumberPagination
 from decimal import Decimal, InvalidOperation
 
 from rest_framework.views import APIView
@@ -263,23 +263,50 @@ class NearbyHotelListView(APIView):
         )
 
         # Serialize hotel information and include distance
+             # Paginate after filtering and distance sorting
+        paginator = HotelResultsPagination()
+        page = paginator.paginate_queryset(
+            nearby_hotels,
+            request,
+            view=self
+        )
+
+        # Serialize the current page
         results = []
 
-        for item in nearby_hotels:
+        for item in page:
             hotel_data = HotelListSerializer(item["hotel"]).data
             hotel_data["distance_km"] = item["distance_km"]
             results.append(hotel_data)
 
-        return Response({
-        "count": len(results),
-        "radius_km": float(radius_km),
-        "sort_order": sort_order,
-        "search_location": {
-            "latitude": user_lat,
-            "longitude": user_lon,
-        },
-        "results": results,
-    })
+        # Prepare map markers from hotels with coordinates
+        map_markers = []
+
+        for hotel in results:
+            if (
+                hotel.get("latitude") is not None
+                and hotel.get("longitude") is not None
+            ):
+                map_markers.append({
+                    "id": hotel["id"],
+                    "name": hotel["name"],
+                    "latitude": hotel["latitude"],
+                    "longitude": hotel["longitude"],
+                    "distance_km": hotel["distance_km"],
+                })
+
+        return paginator.get_paginated_response(
+            results,
+            metadata={
+                "radius_km": float(radius_km),
+                "sort_order": sort_order,
+                "search_location": {
+                    "latitude": user_lat,
+                    "longitude": user_lon,
+                },
+                "map_markers": map_markers,
+            }
+        )
 
 class PublicHotelDetailView(generics.RetrieveAPIView):
 
@@ -493,11 +520,60 @@ class DestinationHotelListView(APIView):
             many=True
         ).data
 
-        return Response({
-            "count": len(results),
-            "search_destination": {
-                "city": city or None,
-                "area": area or None,
-            },
-            "results": results,
-        })
+          # Paginate destination search results
+        paginator = HotelResultsPagination()
+        page = paginator.paginate_queryset(
+            hotels,
+            request,
+            view=self
+        )
+
+        # Serialize the current page
+        results = HotelListSerializer(
+            page,
+            many=True
+        ).data
+
+        # Prepare map markers only for hotels with coordinates
+        map_markers = []
+
+        for hotel in results:
+            if (
+                hotel.get("latitude") is not None
+                and hotel.get("longitude") is not None
+            ):
+                map_markers.append({
+                    "id": hotel["id"],
+                    "name": hotel["name"],
+                    "latitude": hotel["latitude"],
+                    "longitude": hotel["longitude"],
+                })
+
+        return paginator.get_paginated_response(
+            results,
+            metadata={
+                "search_destination": {
+                    "city": city or None,
+                    "area": area or None,
+                },
+                "map_markers": map_markers,
+            }
+        )
+class HotelResultsPagination(PageNumberPagination):
+    page_size = 10
+    page_size_query_param = "page_size"
+    max_page_size = 50
+
+    def get_paginated_response(self, data, metadata=None):
+        response_data = {
+            "count": self.page.paginator.count,
+            "next": self.get_next_link(),
+            "previous": self.get_previous_link(),
+        }
+
+        if metadata:
+            response_data.update(metadata)
+
+        response_data["results"] = data
+
+        return Response(response_data)
