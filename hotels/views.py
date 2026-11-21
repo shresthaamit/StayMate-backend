@@ -108,8 +108,15 @@ class NearbyHotelListView(APIView):
 
         user_lat = float(latitude)
         user_lon = float(longitude)
+        # Validate distance sorting order
+        sort_order = request.query_params.get("sort_order", "asc").lower()
 
-        # Retrieve only publicly visible hotels with coordinates
+        if sort_order not in ["asc", "desc"]:
+            return Response(
+                {"error": "sort_order must be either 'asc' or 'desc'."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+                # Retrieve only publicly visible hotels with coordinates
        
         hotels = Hotel.objects.filter(
             status=Hotel.Status.ACTIVE,
@@ -246,11 +253,13 @@ class NearbyHotelListView(APIView):
                 })
 
         # Nearest hotels first
+                nearby_hotels.sort(
+            key=lambda item: item["hotel"].name
+        )
+
         nearby_hotels.sort(
-            key=lambda item: (
-                item["distance_km"],
-                item["hotel"].name
-            )
+            key=lambda item: item["distance_km"],
+            reverse=(sort_order == "desc")
         )
 
         # Serialize hotel information and include distance
@@ -262,10 +271,15 @@ class NearbyHotelListView(APIView):
             results.append(hotel_data)
 
         return Response({
-            "count": len(results),
-            "radius_km": float(radius_km),
-            "results": results,
-        })
+        "count": len(results),
+        "radius_km": float(radius_km),
+        "sort_order": sort_order,
+        "search_location": {
+            "latitude": user_lat,
+            "longitude": user_lon,
+        },
+        "results": results,
+    })
 
 class PublicHotelDetailView(generics.RetrieveAPIView):
 

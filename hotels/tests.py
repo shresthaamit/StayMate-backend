@@ -237,3 +237,80 @@ class NearbyHotelAPITests(TestCase):
 
         self.assertEqual(response.status_code, 400)
 
+
+    def test_default_sorting_is_ascending(self):
+        self.create_hotel(
+            name="Farther Hotel",
+            latitude=Decimal("28.2096"),
+            longitude=Decimal("84.0000"),
+        )
+
+        response = self.search()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data["sort_order"],
+            "asc",
+        )
+        self.assertEqual(
+            response.data["results"][0]["name"],
+            "Nearby Verified Hotel",
+        )
+
+    def test_explicit_ascending_sorting(self):
+        self.create_hotel(
+            name="Farther Hotel",
+            latitude=Decimal("28.2096"),
+            longitude=Decimal("84.0000"),
+        )
+
+        response = self.search(sort_order="asc")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data["results"][0]["name"],
+            "Nearby Verified Hotel",
+        )
+
+    def test_descending_sorting(self):
+        self.create_hotel(
+            name="Farther Hotel",
+            latitude=Decimal("28.2096"),
+            longitude=Decimal("84.0000"),
+        )
+
+        response = self.search(sort_order="desc")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data["sort_order"],
+            "desc",
+        )
+        self.assertEqual(
+            response.data["results"][0]["name"],
+            "Farther Hotel",
+        )
+
+    def test_invalid_sort_order_returns_400(self):
+        response = self.search(sort_order="random")
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_response_includes_search_location(self):
+        response = self.search()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data["search_location"],
+            {
+                "latitude": 28.2096,
+                "longitude": 83.9856,
+            },
+        )
+
+    def test_response_includes_radius_and_sort_order(self):
+        response = self.search(radius_km="10", sort_order="asc")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["radius_km"], 10.0)
+        self.assertEqual(response.data["sort_order"], "asc")
