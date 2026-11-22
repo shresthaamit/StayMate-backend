@@ -2,7 +2,8 @@ from django.urls import path
 
 from .views import (
     PublicHotelListView,PublicHotelDetailView,OrganisationHotelListView,
-    OrganisationHotelDetailView,HotelCreateView,HotelUpdateView,HotelDeleteView,NearbyHotelListView,DestinationHotelListView
+    OrganisationHotelDetailView,HotelCreateView,HotelUpdateView,HotelDeleteView,NearbyHotelListView,
+    DestinationHotelListView,MapBoundsHotelListView
 )
 
 urlpatterns = [
@@ -40,5 +41,9 @@ path(
     DestinationHotelListView.as_view(),
     name="destination-hotel-search"
 ),
-
+path(
+    "map/",
+    MapBoundsHotelListView.as_view(),
+    name="map-hotel-search"
+),
 ]

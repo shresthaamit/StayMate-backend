@@ -11,7 +11,7 @@ from .permissions import IsActiveOrganisationMember,IsOrganisationOwnerOrAdmin
 import math
 from rest_framework.pagination import PageNumberPagination
 from decimal import Decimal, InvalidOperation
-
+from django.db.models import Q
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -303,6 +303,217 @@ class NearbyHotelListView(APIView):
                 "search_location": {
                     "latitude": user_lat,
                     "longitude": user_lon,
+                },
+                "map_markers": map_markers,
+            }
+        )
+
+class MapBoundsHotelListView(APIView):
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+
+        # Validate the four map boundaries.
+        bounds = {}
+
+        for parameter in ["north", "south", "east", "west"]:
+            try:
+                value = Decimal(request.query_params.get(parameter))
+            except (InvalidOperation, TypeError, ValueError):
+                return Response(
+                    {"error": f"A valid {parameter} boundary is required."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if not value.is_finite():
+                return Response(
+                    {"error": f"{parameter} must be a finite number."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            bounds[parameter] = value
+
+        north = bounds["north"]
+        south = bounds["south"]
+        east = bounds["east"]
+        west = bounds["west"]
+
+        # Validate latitude boundaries.
+        if not -90 <= south <= 90 or not -90 <= north <= 90:
+            return Response(
+                {"error": "Latitude boundaries must be between -90 and 90."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if north <= south:
+            return Response(
+                {"error": "The north boundary must be greater than the south boundary."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validate longitude boundaries.
+        if not -180 <= west <= 180 or not -180 <= east <= 180:
+            return Response(
+                {"error": "Longitude boundaries must be between -180 and 180."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if east == west:
+            return Response(
+                {"error": "The east and west boundaries must not be equal."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Retrieve publicly visible hotels that have coordinates.
+        hotels = Hotel.objects.filter(
+            status=Hotel.Status.ACTIVE,
+            is_verified=True,
+            organisation__status="active",
+            is_deleted=False,
+        ).exclude(
+            latitude__isnull=True
+        ).exclude(
+            longitude__isnull=True
+        ).select_related(
+            "organisation"
+        )
+
+        # Filter hotels inside the visible latitude boundaries.
+        hotels = hotels.filter(
+            latitude__gte=south,
+            latitude__lte=north,
+        )
+
+        # Handle normal longitude ranges and date-line crossing.
+        if west < east:
+            hotels = hotels.filter(
+                longitude__gte=west,
+                longitude__lte=east,
+            )
+        else:
+            hotels = hotels.filter(
+                Q(longitude__gte=west) |
+                Q(longitude__lte=east)
+            )
+
+        # Optional city filter.
+        city = request.query_params.get("city")
+        if city:
+            hotels = hotels.filter(city__icontains=city.strip())
+
+        # Optional area filter.
+        area = request.query_params.get("area")
+        if area:
+            hotels = hotels.filter(area__icontains=area.strip())
+
+        # Optional minimum star rating.
+        min_star_rating = request.query_params.get("min_star_rating")
+        if min_star_rating:
+            try:
+                min_star_rating = int(min_star_rating)
+            except ValueError:
+                return Response(
+                    {"error": "min_star_rating must be an integer."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if not 1 <= min_star_rating <= 5:
+                return Response(
+                    {"error": "min_star_rating must be between 1 and 5."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            hotels = hotels.filter(star_rating__gte=min_star_rating)
+
+        # Optional maximum star rating.
+        max_star_rating = request.query_params.get("max_star_rating")
+        if max_star_rating:
+            try:
+                max_star_rating = int(max_star_rating)
+            except ValueError:
+                return Response(
+                    {"error": "max_star_rating must be an integer."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if not 1 <= max_star_rating <= 5:
+                return Response(
+                    {"error": "max_star_rating must be between 1 and 5."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            hotels = hotels.filter(star_rating__lte=max_star_rating)
+
+        if (
+            min_star_rating
+            and max_star_rating
+            and min_star_rating > max_star_rating
+        ):
+            return Response(
+                {"error": "Minimum star rating cannot exceed maximum rating."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Optional hotel type filter.
+        hotel_type = request.query_params.get("hotel_type")
+        if hotel_type:
+            valid_hotel_types = Hotel.HotelType.values
+
+            if hotel_type not in valid_hotel_types:
+                return Response(
+                    {
+                        "error": "Invalid hotel_type.",
+                        "valid_choices": valid_hotel_types,
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            hotels = hotels.filter(hotel_type=hotel_type)
+
+        # Optional facility filter.
+        facility = request.query_params.get("facility")
+        if facility:
+            hotels = hotels.filter(
+                hotel_facilities__facility__name__icontains=facility.strip()
+            ).distinct()
+
+        # Consistent ordering for pagination.
+        hotels = hotels.order_by("name", "id")
+
+        # Paginate the matching hotels.
+        paginator = HotelResultsPagination()
+        page = paginator.paginate_queryset(
+            hotels,
+            request,
+            view=self
+        )
+
+        results = HotelListSerializer(page, many=True).data
+
+        # Build map markers for the current page.
+        map_markers = []
+
+        for hotel in results:
+            if (
+                hotel.get("latitude") is not None
+                and hotel.get("longitude") is not None
+            ):
+                map_markers.append({
+                    "id": hotel["id"],
+                    "name": hotel["name"],
+                    "latitude": hotel["latitude"],
+                    "longitude": hotel["longitude"],
+                })
+
+        return paginator.get_paginated_response(
+            results,
+            metadata={
+                "map_bounds": {
+                    "north": float(north),
+                    "south": float(south),
+                    "east": float(east),
+                    "west": float(west),
                 },
                 "map_markers": map_markers,
             }
