@@ -4,13 +4,138 @@ from datetime import timedelta
 from django.utils import timezone
 from hotels.models import RoomAvailability
 from .models import HotelCall, HotelMatch
-from hotels.models import Hotel
+from hotels.models import Hotel,HotelContact
 from django.db import transaction
 
 
 def normalize_name(value):
     """Make facility names comparable."""
     return str(value).strip().replace("_", " ").casefold()
+
+
+def normalize_call_language(value):
+    """Convert supported language names into internal language codes."""
+
+    if not value:
+        return None
+
+    language = str(value).strip().casefold()
+
+    language_codes = {
+        "english": "en",
+        "en": "en",
+        "nepali": "ne",
+        "ne": "ne",
+        "नेपाली": "ne",
+    }
+
+    return language_codes.get(language)
+
+
+def resolve_hotel_contact(hotel):
+    """
+    Select the most appropriate hotel contact and calling number.
+
+    Priority:
+    1. Primary reservation contact
+    2. Other reservation contacts
+    3. Primary receptionist
+    4. Other receptionists
+    5. Other primary contacts
+    6. Other contacts
+    7. Hotel alternative phone
+    8. Hotel main phone
+    """
+
+    contacts = list(
+        HotelContact.objects.filter(hotel=hotel).order_by("id")
+    )
+
+    def contact_priority(contact):
+        if contact.role == HotelContact.ContactRole.RESERVATION:
+            return (0 if contact.is_primary else 1, contact.id)
+
+        if contact.role == HotelContact.ContactRole.RECEPTIONIST:
+            return (2 if contact.is_primary else 3, contact.id)
+
+        return (4 if contact.is_primary else 5, contact.id)
+
+    # Sort contacts by role and primary status.
+    contacts.sort(key=contact_priority)
+
+    selected_contact = next(
+        (
+            contact
+            for contact in contacts
+            if contact.phone_number
+            and contact.phone_number.strip()
+        ),
+        None,
+    )
+
+    if selected_contact:
+        phone_number = selected_contact.phone_number.strip()
+        contact_name = selected_contact.name
+        contact_role = selected_contact.role
+        contact_id = selected_contact.id
+        contact_email = (
+            selected_contact.email.strip()
+            or hotel.contact_email
+        )
+        source = "hotel_contact"
+
+        language = (
+            normalize_call_language(
+                selected_contact.preferred_language
+            )
+            or normalize_call_language(hotel.preferred_language)
+            or "en"
+        )
+
+    else:
+        phone_number = (
+            hotel.alternative_phone.strip()
+            or hotel.contact_phone.strip()
+        )
+
+        contact_name = None
+        contact_role = None
+        contact_id = None
+        contact_email = hotel.contact_email
+        source = (
+            "hotel_alternative_phone"
+            if hotel.alternative_phone.strip()
+            else "hotel_main_phone"
+        )
+
+        language = (
+            normalize_call_language(hotel.preferred_language)
+            or "en"
+        )
+
+    if not phone_number:
+        return {
+            "available": False,
+            "contact_id": None,
+            "contact_name": None,
+            "contact_role": None,
+            "phone_number": None,
+            "email": None,
+            "language": language,
+            "source": None,
+        }
+
+    return {
+        "available": True,
+        "contact_id": contact_id,
+        "contact_name": contact_name,
+        "contact_role": contact_role,
+        "phone_number": phone_number,
+        "email": contact_email,
+        "language": language,
+        "source": source,
+    }
+
 
 
 def has_required_facilities(hotel, room_type, required_facilities):

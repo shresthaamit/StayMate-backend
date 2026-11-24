@@ -202,6 +202,39 @@ class HotelCall(models.Model):
         on_delete=models.CASCADE,
         related_name="calls"
     )
+    target_contact_id = models.PositiveIntegerField(
+        null=True,
+        blank=True
+    )
+
+    target_contact_name = models.CharField(
+        max_length=150,
+        blank=True
+    )
+
+    target_contact_role = models.CharField(
+        max_length=30,
+        blank=True
+    )
+
+    target_phone_number = models.CharField(
+        max_length=20,
+        blank=True
+    )
+
+    target_contact_email = models.EmailField(
+        blank=True
+    )
+
+    target_language = models.CharField(
+        max_length=10,
+        default="en"
+    )
+
+    target_contact_source = models.CharField(
+        max_length=30,
+        blank=True
+    )
 
     attempt_number = models.PositiveSmallIntegerField(
         default=1,

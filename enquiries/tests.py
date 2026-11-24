@@ -4,11 +4,12 @@ from decimal import Decimal
 from django.contrib.auth import get_user_model
 from rest_framework import status
 from rest_framework.test import APITestCase
-
+from .services import resolve_hotel_contact
 from hotels.models import (
     Organisation,
     Membership,
     Hotel,
+    HotelContact,
     RoomType,
     RoomAvailability,
 )
@@ -464,6 +465,114 @@ class HotelCallAPITests(APITestCase):
             HotelMatch.Status.UNAVAILABLE
         )
 
+
+    def test_primary_reservation_contact_is_selected(self):
+        receptionist = HotelContact.objects.create(
+            hotel=self.hotel,
+            name="Receptionist",
+            role=HotelContact.ContactRole.RECEPTIONIST,
+            phone_number="+9779800000001",
+        )
+
+        reservation = HotelContact.objects.create(
+            hotel=self.hotel,
+            name="Reservation Manager",
+            role=HotelContact.ContactRole.RESERVATION,
+            phone_number="+9779800000002",
+            is_primary=True,
+            preferred_language="Nepali",
+        )
+
+        result = resolve_hotel_contact(self.hotel)
+
+        self.assertTrue(result["available"])
+        self.assertEqual(result["contact_id"], reservation.id)
+        self.assertEqual(result["contact_name"], "Reservation Manager")
+        self.assertEqual(result["phone_number"], "+9779800000002")
+        self.assertEqual(result["language"], "ne")
+        self.assertEqual(result["source"], "hotel_contact")
+
+    def test_reservation_contact_has_priority_over_receptionist(self):
+        receptionist = HotelContact.objects.create(
+            hotel=self.hotel,
+            name="Primary Receptionist",
+            role=HotelContact.ContactRole.RECEPTIONIST,
+            phone_number="+9779800000001",
+            is_primary=True,
+        )
+
+        reservation = HotelContact.objects.create(
+            hotel=self.hotel,
+            name="Reservation Staff",
+            role=HotelContact.ContactRole.RESERVATION,
+            phone_number="+9779800000002",
+        )
+
+        result = resolve_hotel_contact(self.hotel)
+
+        self.assertEqual(result["contact_id"], reservation.id)
+
+    def test_hotel_alternative_phone_is_used_when_no_contacts_exist(self):
+        self.hotel.alternative_phone = "+9779800000003"
+        self.hotel.preferred_language = "Nepali"
+        self.hotel.save()
+
+        result = resolve_hotel_contact(self.hotel)
+
+        self.assertTrue(result["available"])
+        self.assertEqual(
+            result["phone_number"],
+            "+9779800000003"
+        )
+        self.assertEqual(result["language"], "ne")
+        self.assertEqual(
+            result["source"],
+            "hotel_alternative_phone"
+        )
+
+    def test_main_phone_is_used_when_alternative_is_missing(self):
+        self.hotel.alternative_phone = ""
+        self.hotel.save()
+
+        result = resolve_hotel_contact(self.hotel)
+
+        self.assertTrue(result["available"])
+        self.assertEqual(
+            result["phone_number"],
+            self.hotel.contact_phone
+        )
+        self.assertEqual(
+            result["source"],
+            "hotel_main_phone"
+        )
+
+    def test_contact_language_falls_back_to_hotel_language(self):
+        self.hotel.preferred_language = "Nepali"
+        self.hotel.save()
+
+        contact = HotelContact.objects.create(
+            hotel=self.hotel,
+            name="Receptionist",
+            role=HotelContact.ContactRole.RECEPTIONIST,
+            phone_number="+9779800000004",
+            preferred_language="",
+        )
+
+        result = resolve_hotel_contact(self.hotel)
+
+        self.assertEqual(result["contact_id"], contact.id)
+        self.assertEqual(result["language"], "ne")
+
+    def test_no_available_phone_returns_unavailable(self):
+        self.hotel.contact_phone = ""
+        self.hotel.alternative_phone = ""
+        self.hotel.save()
+
+        result = resolve_hotel_contact(self.hotel)
+
+        self.assertFalse(result["available"])
+        self.assertIsNone(result["phone_number"])
+
     def test_missing_room_type_fails_call(self):
         self.match.matched_room_type = None
         self.match.save(update_fields=["matched_room_type"])
@@ -554,6 +663,148 @@ class HotelCallAPITests(APITestCase):
                 hotel_match=self.match
             ).count(),
             2
+        )
+    def test_call_creation_saves_primary_reservation_contact_snapshot(self):
+        # A primary receptionist should not outrank a reservation contact.
+        HotelContact.objects.create(
+            hotel=self.hotel,
+            name="Primary Receptionist",
+            role=HotelContact.ContactRole.RECEPTIONIST,
+            phone_number="+9779800000001",
+            is_primary=True,
+        )
+
+        reservation = HotelContact.objects.create(
+            hotel=self.hotel,
+            name="Reservation Manager",
+            role=HotelContact.ContactRole.RESERVATION,
+            phone_number="+9779800000002",
+            is_primary=False,
+            preferred_language="Nepali",
+        )
+
+        response = self.client.post(
+            self.calls_url,
+            {},
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED
+        )
+
+        call = HotelCall.objects.get(pk=response.data["id"])
+
+        self.assertEqual(call.target_contact_id, reservation.id)
+        self.assertEqual(
+            call.target_contact_name,
+            "Reservation Manager"
+        )
+        self.assertEqual(
+            call.target_contact_role,
+            HotelContact.ContactRole.RESERVATION
+        )
+        self.assertEqual(
+            call.target_phone_number,
+            "+9779800000002"
+        )
+        self.assertEqual(call.target_language, "ne")
+        self.assertEqual(
+            call.target_contact_source,
+            "hotel_contact"
+        )
+
+        # Verify the API response also exposes the saved snapshot.
+        self.assertEqual(
+            response.data["target_phone_number"],
+            "+9779800000002"
+        )
+        self.assertEqual(response.data["target_language"], "ne")
+
+    def test_call_creation_uses_alternative_phone_when_no_contacts_exist(self):
+        self.hotel.alternative_phone = "+9779800000003"
+        self.hotel.preferred_language = "Nepali"
+        self.hotel.save()
+
+        response = self.client.post(
+            self.calls_url,
+            {},
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED
+        )
+
+        call = HotelCall.objects.get(pk=response.data["id"])
+
+        self.assertEqual(
+            call.target_phone_number,
+            "+9779800000003"
+        )
+        self.assertEqual(call.target_language, "ne")
+        self.assertEqual(
+            call.target_contact_source,
+            "hotel_alternative_phone"
+        )
+        self.assertIsNone(call.target_contact_id)
+
+    def test_call_creation_uses_main_phone_when_alternative_is_missing(self):
+        self.hotel.alternative_phone = ""
+        self.hotel.save()
+
+        response = self.client.post(
+            self.calls_url,
+            {},
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED
+        )
+
+        call = HotelCall.objects.get(pk=response.data["id"])
+
+        self.assertEqual(
+            call.target_phone_number,
+            self.hotel.contact_phone
+        )
+        self.assertEqual(
+            call.target_contact_source,
+            "hotel_main_phone"
+        )
+
+    def test_call_creation_fails_when_no_phone_number_is_available(self):
+        self.hotel.contact_phone = ""
+        self.hotel.alternative_phone = ""
+        self.hotel.save()
+
+        response = self.client.post(
+            self.calls_url,
+            {},
+            format="json"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST
+        )
+
+        self.assertEqual(
+            HotelCall.objects.filter(
+                hotel_match=self.match
+            ).count(),
+            0
+        )
+
+        self.match.refresh_from_db()
+
+        self.assertEqual(
+            self.match.status,
+            HotelMatch.Status.SHORTLISTED
         )
 
 

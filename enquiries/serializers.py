@@ -144,7 +144,6 @@ class HotelCallSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = HotelCall
-
         fields = [
             "id",
             "hotel_match",
@@ -160,6 +159,13 @@ class HotelCallSerializer(serializers.ModelSerializer):
             "completed_at",
             "created_at",
             "updated_at",
+            "target_contact_id",
+            "target_contact_name",
+            "target_contact_role",
+            "target_phone_number",
+            "target_contact_email",
+            "target_language",
+            "target_contact_source",
         ]
 
         read_only_fields = fields

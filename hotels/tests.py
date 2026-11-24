@@ -816,7 +816,27 @@ class MapBoundsHotelAPITests(TestCase):
         self.assertEqual(len(response.data["map_markers"]), 1)
 
     # Boundary validation
+    def test_map_search_enforces_maximum_page_size(self):
+        for number in range(50):
+            self.create_hotel(
+                name=f"Map Pagination Hotel {number:02d}",
+                latitude=Decimal("28.2200"),
+                longitude=Decimal("83.9900"),
+            )
 
+        response = self.search(page_size="100")
+
+        self.assertEqual(response.status_code, 200)
+
+        # 50 additional hotels + the original hotel
+        self.assertEqual(response.data["count"], 51)
+
+        # Configured maximum page size is 50
+        self.assertEqual(len(response.data["results"]), 50)
+        self.assertEqual(len(response.data["map_markers"]), 50)
+
+        self.assertIsNotNone(response.data["next"])
+        self.assertIsNone(response.data["previous"])
     def test_missing_boundary_returns_400(self):
         response = self.client.get(
             self.url,

@@ -9,7 +9,7 @@ from django.db import transaction
 from rest_framework.exceptions import ValidationError
 from decimal import Decimal, InvalidOperation
 from .serializers import HotelMatchSerializer,TravellerRequirementSerializer, HotelCallSerializer,TravellerResultSerializer
-from .services import generate_hotel_matches,run_simulated_hotel_call
+from .services import generate_hotel_matches,run_simulated_hotel_call,resolve_hotel_contact
 from .models import TravellerRequirement, HotelCall, HotelMatch
 
 
@@ -106,6 +106,15 @@ class HotelCallListCreateView(generics.ListCreateAPIView):
                     "This hotel match already has an active call."
                 )
 
+            # Resolve the hotel contact and calling language.
+            contact = resolve_hotel_contact(match.hotel)
+
+            if not contact["available"]:
+                raise ValidationError(
+                    "No valid hotel contact phone number is available. "
+                    "Please update the hotel's contact information."
+                )
+
             previous_attempts = HotelCall.objects.filter(
                 hotel_match=match
             ).count()
@@ -115,6 +124,15 @@ class HotelCallListCreateView(generics.ListCreateAPIView):
                 attempt_number=previous_attempts + 1,
                 mode=HotelCall.Mode.SIMULATED,
                 status=HotelCall.Status.QUEUED,
+
+                # Contact snapshot
+                target_contact_id=contact["contact_id"],
+                target_contact_name=contact["contact_name"] or "",
+                target_contact_role=contact["contact_role"] or "",
+                target_phone_number=contact["phone_number"],
+                target_contact_email=contact["email"] or "",
+                target_language=contact["language"],
+                target_contact_source=contact["source"] or "",
             )
 
             match.status = HotelMatch.Status.CALL_PENDING
@@ -126,8 +144,6 @@ class HotelCallListCreateView(generics.ListCreateAPIView):
             serializer.data,
             status=status.HTTP_201_CREATED
         )
-
-
 class HotelCallDetailView(generics.RetrieveAPIView):
     serializer_class = HotelCallSerializer
     permission_classes = [IsAuthenticated]
