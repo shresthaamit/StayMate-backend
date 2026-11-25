@@ -13,7 +13,7 @@ from hotels.models import (
     RoomType,
     RoomAvailability,
 )
-
+from enquiries.calling.conversation import HotelConversationEngine
 from .models import TravellerRequirement, HotelMatch, HotelCall
 
 
@@ -465,7 +465,60 @@ class HotelCallAPITests(APITestCase):
             HotelMatch.Status.UNAVAILABLE
         )
 
+    def test_conversation_engine_generates_english_questions(self):
+        self.call = HotelCall.objects.create(
+            hotel_match=self.match,
+            attempt_number=1,
+            target_language="en",
+        )
 
+        engine = HotelConversationEngine(self.call)
+        questions = engine.build_questions()
+
+        keys = [item["key"] for item in questions]
+
+        self.assertEqual(
+            keys,
+            [
+                "introduction",
+                "dates_and_guests",
+                "availability",
+                "price",
+                "breakfast",
+                "airport_pickup",
+                "check_in_out",
+            ],
+        )
+
+        self.assertIn("StayMate", questions[0]["message"])
+        self.assertIn("adults", questions[1]["message"])
+
+    def test_conversation_engine_generates_nepali_questions(self):
+        self.call = HotelCall.objects.create(
+            hotel_match=self.match,
+            attempt_number=1,
+            target_language="ne",
+        )
+
+        engine = HotelConversationEngine(self.call)
+        questions = engine.build_questions()
+
+        self.assertEqual(len(questions), 7)
+        self.assertIn("नमस्कार", questions[0]["message"])
+        self.assertIn("विमानस्थल", questions[5]["message"])
+
+    def test_conversation_engine_defaults_unsupported_language_to_english(self):
+        self.call = HotelCall.objects.create(
+            hotel_match=self.match,
+            attempt_number=1,
+            target_language="fr",
+        )
+
+        engine = HotelConversationEngine(self.call)
+        questions = engine.build_questions()
+
+        self.assertEqual(engine.language, "en")
+        self.assertIn("Hello", questions[0]["message"])
     def test_primary_reservation_contact_is_selected(self):
         receptionist = HotelContact.objects.create(
             hotel=self.hotel,

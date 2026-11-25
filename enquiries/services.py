@@ -1,5 +1,4 @@
-
-from datetime import timedelta
+from enquiries.calling.conversation import HotelConversationEngine
 from datetime import timedelta
 from django.utils import timezone
 from hotels.models import RoomAvailability
@@ -554,27 +553,67 @@ def run_simulated_hotel_call(call):
             "message": message,
             "timestamp": timezone.now().isoformat(),
         })
+    conversation_engine = HotelConversationEngine(call)
 
-    add_message(
-        "assistant",
-        f"Hello! I'm StayMate, contacting {hotel.name} "
-        "on behalf of a traveller."
-    )
+    questions = {
+        item["key"]: item["message"]
+        for item in conversation_engine.build_questions()
+    }
 
-    add_message(
-        "assistant",
-        f"We are enquiring about a stay from "
-        f"{requirement.check_in_date} to "
-        f"{requirement.check_out_date} for "
-        f"{requirement.adults} adults and "
-        f"{requirement.children} children."
-    )
+    language = conversation_engine.language
+
+    replies = {
+        "missing_room": {
+            "en": "Room information is not available for this enquiry.",
+            "ne": "यस सोधपुछका लागि कोठाको जानकारी उपलब्ध छैन।",
+        },
+        "unavailable": {
+            "en": (
+                "The requested room availability could not be confirmed "
+                "for every night of the stay."
+            ),
+            "ne": (
+                "बसाइको सबै रातका लागि अनुरोध गरिएको कोठाको उपलब्धता "
+                "पुष्टि गर्न सकिएन।"
+            ),
+        },
+        "available": {
+            "en": "Yes, the requested room is available for those dates.",
+            "ne": "हो, अनुरोध गरिएका मितिहरूमा कोठा उपलब्ध छ।",
+        },
+        "price_unknown": {
+            "en": "The price could not be confirmed.",
+            "ne": "मूल्य पुष्टि गर्न सकिएन।",
+        },
+        "breakfast_yes": {
+            "en": "Yes, breakfast is included.",
+            "ne": "हो, बिहानको खाना समावेश छ।",
+        },
+        "breakfast_no": {
+            "en": "Breakfast is not included according to our records.",
+            "ne": "हाम्रो अभिलेखअनुसार बिहानको खाना समावेश छैन।",
+        },
+        "airport_yes": {
+            "en": "Airport pickup is listed among the hotel's services.",
+            "ne": "होटलको सेवामा विमानस्थल पिकअप समावेश छ।",
+        },
+        "airport_unknown": {
+            "en": "Airport pickup information is not recorded.",
+            "ne": "विमानस्थल पिकअपसम्बन्धी जानकारी उपलब्ध छैन।",
+        },
+        "times_unknown": {
+            "en": "Check-in and check-out times are not recorded.",
+            "ne": "चेक-इन र चेक-आउट समयको जानकारी उपलब्ध छैन।",
+        },
+    }
+    add_message("assistant", questions["introduction"])
+    add_message("assistant", questions["dates_and_guests"])
 
     # Handle missing matched room
     if room is None:
         add_message(
             "hotel",
-            "Room information is not available for this enquiry."
+            replies["missing_room"][language]
         )
 
         call.transcript = transcript
@@ -631,29 +670,16 @@ def run_simulated_hotel_call(call):
             nightly_prices.append(price)
 
     if not all_nights_available:
-        add_message(
-            "assistant",
-            "Could you confirm whether the requested room is available?"
-        )
+        add_message("assistant", questions["availability"])
 
         add_message(
             "hotel",
-            "The requested room availability could not be confirmed "
-            "for every night of the stay."
+            (
+                replies["available"][language]
+                if all_nights_available
+                else replies["unavailable"][language]
+            )
         )
-
-    else:
-        add_message(
-            "assistant",
-            f"Do you have a {room.name} available for "
-            f"{requirement.rooms} room(s)?"
-        )
-
-        add_message(
-            "hotel",
-            f"Yes, {room.name} is available for the requested dates."
-        )
-
     # Determine stored services and facilities
     services = [
         str(item).strip().casefold().replace("_", " ")
@@ -685,31 +711,44 @@ def run_simulated_hotel_call(call):
     )
 
     # Simulated conversation questions
-    add_message(
-        "assistant",
-        "Is breakfast included in the room price?"
-    )
+    add_message("assistant", questions["price"])
+
+    quoted_price = max(nightly_prices) if nightly_prices else None
+
+    if quoted_price is not None:
+        price_reply = (
+            f"The price is {quoted_price} {room.currency} "
+            "per room per night."
+            if language == "en"
+            else (
+                f"प्रति कोठा प्रति रातको मूल्य "
+                f"{quoted_price} {room.currency} हो।"
+            )
+        )
+    else:
+        price_reply = replies["price_unknown"][language]
+
+    add_message("hotel", price_reply)
+
+    add_message("assistant", questions["breakfast"])
 
     add_message(
         "hotel",
         (
-            "Yes, breakfast is included."
+            replies["breakfast_yes"][language]
             if breakfast
-            else "Breakfast is not included according to the room information."
+            else replies["breakfast_no"][language]
         )
     )
 
-    add_message(
-        "assistant",
-        "Do you provide airport pickup?"
-    )
+    add_message("assistant", questions["airport_pickup"])
 
     add_message(
         "hotel",
         (
-            "Airport pickup is listed among the hotel's services."
+            replies["airport_yes"][language]
             if airport_pickup is True
-            else "Airport pickup information is not recorded."
+            else replies["airport_unknown"][language]
         )
     )
 
@@ -726,21 +765,24 @@ def run_simulated_hotel_call(call):
         else None
     )
 
-    add_message(
-        "assistant",
-        "Could you confirm your check-in and check-out times?"
-    )
+    add_message("assistant", questions["check_in_out"])
 
     if check_in_time and check_out_time:
-        add_message(
-            "hotel",
+        add_message("assistant", questions["check_in_out"])
+
+    if check_in_time and check_out_time:
+        time_reply = (
             f"Check-in: {check_in_time}. Check-out: {check_out_time}."
+            if language == "en"
+            else (
+                f"चेक-इन: {check_in_time}। "
+                f"चेक-आउट: {check_out_time}।"
+            )
         )
     else:
-        add_message(
-            "hotel",
-            "Check-in and check-out times are not recorded."
-        )
+        time_reply = replies["times_unknown"][language]
+
+    add_message("hotel", time_reply)
 
     # Calculate conservative quoted price per room per night
     quoted_price = max(nightly_prices) if nightly_prices else None
