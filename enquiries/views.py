@@ -9,9 +9,9 @@ from django.db import transaction
 from rest_framework.exceptions import ValidationError
 from decimal import Decimal, InvalidOperation
 from .serializers import HotelMatchSerializer,TravellerRequirementSerializer, HotelCallSerializer,TravellerResultSerializer
-from .services import generate_hotel_matches,run_simulated_hotel_call,resolve_hotel_contact
+from .services import generate_hotel_matches, resolve_hotel_contact
 from .models import TravellerRequirement, HotelCall, HotelMatch
-
+from .calling.workflow import execute_hotel_call
 
 
 class TravellerRequirementListCreateView(generics.ListCreateAPIView):
@@ -176,7 +176,7 @@ class HotelCallSimulateView(APIView):
                     "Only queued calls can be simulated."
                 )
 
-            call = run_simulated_hotel_call(call)
+            call = execute_hotel_call(call)
 
         serializer = HotelCallSerializer(call)
 
