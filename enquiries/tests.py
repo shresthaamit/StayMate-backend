@@ -1,4 +1,4 @@
-
+from django.test import TestCase, SimpleTestCase
 from datetime import date, timedelta
 from decimal import Decimal
 from django.contrib.auth import get_user_model
@@ -15,8 +15,11 @@ from hotels.models import (
 )
 from enquiries.calling.conversation import HotelConversationEngine
 from .models import TravellerRequirement, HotelMatch, HotelCall
-
-
+from enquiries.calling.response_processor import HotelResponseProcessor
+from enquiries.calling.workflow import (
+    process_and_store_hotel_response,
+    process_hotel_response,
+)
 User = get_user_model()
 
 
@@ -373,6 +376,98 @@ class HotelCallAPITests(APITestCase):
         self.calls_url = (
             f"/api/enquiries/matches/{self.match.id}/calls/"
         )
+
+    def test_stores_hotel_response_and_transcript(self):
+        call_id = self.create_call()
+        call = HotelCall.objects.get(pk=call_id)
+
+        process_and_store_hotel_response(
+            call,
+            "availability",
+            "Yes, we have 2 rooms available."
+        )
+
+        call.refresh_from_db()
+
+        self.assertEqual(len(call.transcript), 1)
+        self.assertEqual(
+            call.transcript[0]["role"],
+            "hotel"
+        )
+        self.assertEqual(
+            call.transcript[0]["message"],
+            "Yes, we have 2 rooms available."
+        )
+
+        self.assertEqual(
+            call.response_data["availability"],
+            True
+        )
+        self.assertEqual(
+            call.response_data["available_rooms"],
+            2
+        )
+
+        self.assertEqual(
+            call.response_data["answer_status"]["availability"],
+            "complete"
+        )
+
+    def test_preserves_previous_answers(self):
+        call_id = self.create_call()
+        call = HotelCall.objects.get(pk=call_id)
+
+        process_and_store_hotel_response(
+            call,
+            "availability",
+            "Yes, we have 2 rooms available."
+        )
+
+        call.refresh_from_db()
+
+        process_and_store_hotel_response(
+            call,
+            "breakfast",
+            "Yes, breakfast is included."
+        )
+
+        call.refresh_from_db()
+
+        self.assertEqual(len(call.transcript), 2)
+
+        self.assertIs(
+            call.response_data["availability"],
+            True
+        )
+        self.assertIs(
+            call.response_data["breakfast_included"],
+            True
+        )
+
+        self.assertIn(
+            "availability",
+            call.response_data["answers"]
+        )
+        self.assertIn(
+            "breakfast",
+            call.response_data["answers"]
+        )
+
+    def test_rejects_empty_hotel_response(self):
+        call_id = self.create_call()
+        call = HotelCall.objects.get(pk=call_id)
+
+        with self.assertRaises(ValueError):
+            process_and_store_hotel_response(
+                call,
+                "availability",
+                "   "
+            )
+
+        call.refresh_from_db()
+
+        self.assertEqual(call.transcript, [])
+        self.assertEqual(call.response_data, {})
 
     def create_call(self):
         response = self.client.post(
@@ -1518,3 +1613,241 @@ class TravellerResultsAPITests(APITestCase):
             second_call.attempt_number,
             2
         )
+
+
+
+
+class HotelResponseProcessorTests(SimpleTestCase):
+
+    def setUp(self):
+        self.processor = HotelResponseProcessor()
+
+    # Answer detection
+
+    def test_detects_english_positive_answer(self):
+        self.assertIs(
+            self.processor.detect_answer("Yes, we have rooms available."),
+            True
+        )
+
+    def test_detects_english_negative_answer(self):
+        self.assertIs(
+            self.processor.detect_answer("No, rooms are not available."),
+            False
+        )
+
+    def test_detects_nepali_positive_answer(self):
+        self.assertIs(
+            self.processor.detect_answer("कोठा उपलब्ध छन्।"),
+            True
+        )
+
+    def test_detects_nepali_negative_answer(self):
+        self.assertIs(
+            self.processor.detect_answer("कोठा उपलब्ध छैन।"),
+            False
+        )
+
+    def test_nepali_standalone_positive_answer(self):
+        self.assertIs(
+            self.processor.detect_answer("कोठा छ।"),
+            True
+        )
+
+    def test_unrelated_numbers_are_not_extracted_as_times(self):
+        result = self.processor.extract_times(
+            "We have 2 rooms and 3 guests."
+        )
+
+        self.assertIsNone(result["check_in_time"])
+        self.assertIsNone(result["check_out_time"])
+
+    def test_price_without_currency_is_partial(self):
+        result = self.processor.process_response(
+            "price",
+            "The price is 2500 per night."
+        )
+
+        self.assertEqual(
+            result["quoted_price_per_room_per_night"],
+            "2500"
+        )
+        self.assertIsNone(result["currency"])
+        self.assertEqual(result["response_status"], "partial")
+
+    def test_price_with_currency_is_complete(self):
+        result = self.processor.process_response(
+            "price",
+            "The price is NPR 2500 per night."
+        )
+
+        self.assertEqual(result["currency"], "NPR")
+        self.assertEqual(result["response_status"], "complete")
+
+    def test_unknown_answer_returns_none(self):
+        self.assertIsNone(
+            self.processor.detect_answer("I am not sure.")
+        )
+
+    def test_unrelated_word_does_not_count_as_negative_answer(self):
+        self.assertIsNone(
+            self.processor.detect_answer("The room is normal.")
+        )
+
+    # Room count
+
+    def test_extracts_room_count_from_english_response(self):
+        self.assertEqual(
+            self.processor.extract_available_rooms("We have 3 rooms."),
+            3
+        )
+
+    def test_extracts_room_count_from_nepali_digits(self):
+        self.assertEqual(
+            self.processor.extract_available_rooms("२ वटा कोठा उपलब्ध छन्।"),
+            2
+        )
+
+    # Price extraction
+
+    def test_extracts_npr_price(self):
+        result = self.processor.extract_price("The price is NPR 2,500 per night.")
+
+        self.assertEqual(
+            result["quoted_price_per_room_per_night"],
+            "2500"
+        )
+        self.assertEqual(result["currency"], "NPR")
+
+    def test_extracts_price_with_nepali_digits(self):
+        result = self.processor.extract_price("प्रति रात रु २,५०० पर्छ।")
+
+        self.assertEqual(
+            result["quoted_price_per_room_per_night"],
+            "2500"
+        )
+        self.assertEqual(result["currency"], "NPR")
+
+    def test_extracts_usd_currency(self):
+        result = self.processor.extract_price("The room costs USD 80.")
+
+        self.assertEqual(
+            result["quoted_price_per_room_per_night"],
+            "80"
+        )
+        self.assertEqual(result["currency"], "USD")
+
+    def test_returns_none_when_price_is_missing(self):
+        result = self.processor.extract_price("Please contact reception.")
+
+        self.assertIsNone(
+            result["quoted_price_per_room_per_night"]
+        )
+        self.assertIsNone(result["currency"])
+
+    # Check-in and check-out times
+
+    def test_extracts_times_with_am_pm(self):
+        result = self.processor.extract_times(
+            "Check-in is at 2 PM and check-out is at 11 AM."
+        )
+
+        self.assertEqual(result["check_in_time"], "14:00")
+        self.assertEqual(result["check_out_time"], "11:00")
+
+    def test_extracts_24_hour_times(self):
+        result = self.processor.extract_times(
+            "Check-in is 14:00 and check-out is 11:00."
+        )
+
+        self.assertEqual(result["check_in_time"], "14:00")
+        self.assertEqual(result["check_out_time"], "11:00")
+
+    def test_extracts_times_written_with_nepali_digits(self):
+        result = self.processor.extract_times(
+            "Check-in २:०० PM and check-out ११:०० AM"
+        )
+
+        self.assertEqual(result["check_in_time"], "14:00")
+        self.assertEqual(result["check_out_time"], "11:00")
+
+    # Structured response processing
+
+    def test_processes_positive_availability_response(self):
+        result = self.processor.process_response(
+            "availability",
+            "Yes, we have 2 rooms available."
+        )
+
+        self.assertEqual(result["response_status"], "complete")
+        self.assertIs(result["availability"], True)
+        self.assertEqual(result["available_rooms"], 2)
+
+    def test_processes_negative_breakfast_response(self):
+        result = self.processor.process_response(
+            "breakfast",
+            "No, breakfast is not included."
+        )
+
+        self.assertEqual(result["response_status"], "complete")
+        self.assertIs(result["breakfast_included"], False)
+
+    def test_processes_positive_airport_pickup_response(self):
+        result = self.processor.process_response(
+            "airport_pickup",
+            "Yes, we provide airport pickup."
+        )
+
+        self.assertEqual(result["response_status"], "complete")
+        self.assertIs(result["airport_pickup"], True)
+
+    def test_empty_response_is_unknown(self):
+        result = self.processor.process_response("price", "")
+
+        self.assertEqual(result["response_status"], "unknown")
+
+    def test_unclear_response_remains_unclear(self):
+        result = self.processor.process_response(
+            "breakfast",
+            "You can ask our manager."
+        )
+
+        self.assertEqual(result["response_status"], "unclear")
+
+    def test_unsupported_question_key_is_unknown(self):
+        result = self.processor.process_response(
+            "hotel_decoration",
+            "We have beautiful rooms."
+        )
+
+        self.assertEqual(result["response_status"], "unknown")
+
+class HotelCallingWorkflowTests(SimpleTestCase):
+
+    def test_workflow_processes_english_availability_response(self):
+        result = process_hotel_response(
+            "availability",
+            "Yes, we have 2 rooms available."
+        )
+
+        self.assertEqual(result["response_status"], "complete")
+        self.assertIs(result["availability"], True)
+        self.assertEqual(result["available_rooms"], 2)
+
+    def test_workflow_processes_nepali_breakfast_response(self):
+        result = process_hotel_response(
+            "breakfast",
+            "हो, बिहानको खाना समावेश छ।"
+        )
+
+        self.assertEqual(result["response_status"], "complete")
+        self.assertIs(result["breakfast_included"], True)
+
+    def test_workflow_preserves_unknown_responses(self):
+        result = process_hotel_response(
+            "airport_pickup",
+            "I am not sure."
+        )
+
+        self.assertEqual(result["response_status"], "unknown")
+        self.assertIsNone(result.get("airport_pickup"))
