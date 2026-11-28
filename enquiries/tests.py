@@ -14,6 +14,7 @@ from hotels.models import (
     RoomAvailability,
 )
 from enquiries.calling.conversation import HotelConversationEngine
+from enquiries.calling.controller import HotelConversationController
 from .models import TravellerRequirement, HotelMatch, HotelCall
 from enquiries.calling.response_processor import HotelResponseProcessor
 from enquiries.calling.workflow import (
@@ -955,7 +956,60 @@ class HotelCallAPITests(APITestCase):
             HotelMatch.Status.SHORTLISTED
         )
 
+    def test_controller_completes_english_conversation(self):
+        call_id = self.create_call()
+        call = HotelCall.objects.get(pk=call_id)
 
+        controller = HotelConversationController(call)
+
+        result = controller.start_conversation()
+
+        self.assertEqual(
+            result["current_question"],
+            "availability"
+        )
+
+        responses = [
+            ("Yes, we have 2 rooms available.", "price"),
+            ("NPR 6000 per room per night.", "breakfast"),
+            ("Yes, breakfast is included.", "airport_pickup"),
+            ("No, we do not provide airport pickup.", "check_in_out"),
+        ]
+
+        for hotel_response, expected_question in responses:
+            result = controller.handle_response(hotel_response)
+
+            self.assertEqual(
+                result["current_question"],
+                expected_question
+            )
+
+        result = controller.handle_response(
+            "Check-in is 2 PM and check-out is 11 AM."
+        )
+
+        call.refresh_from_db()
+
+        self.assertTrue(result["completed"])
+        self.assertEqual(
+            call.status,
+            HotelCall.Status.COMPLETED
+        )
+        self.assertTrue(
+            call.response_data["conversation"]["completed"]
+        )
+        self.assertEqual(
+            len(call.response_data["conversation"]["completed_questions"]),
+            5
+        )
+        self.assertEqual(
+            call.response_data["check_in_time"],
+            "14:00"
+        )
+        self.assertEqual(
+            call.response_data["check_out_time"],
+            "11:00"
+        )
 class TravellerResultsAPITests(APITestCase):
 
     def setUp(self):
@@ -1613,7 +1667,6 @@ class TravellerResultsAPITests(APITestCase):
             second_call.attempt_number,
             2
         )
-
 
 
 
